@@ -257,6 +257,22 @@ interface Dadb : AutoCloseable {
 
         @JvmStatic
         @JvmOverloads
+        fun create(transportFactory: AdbTransportFactory, keyPair: AdbKeyPair? = AdbKeyPair.readDefault()): Dadb = DadbImpl(transportFactory = transportFactory, keyPair = keyPair)
+
+        @JvmStatic
+        @JvmOverloads
+        fun create(description: String, keyPair: AdbKeyPair? = AdbKeyPair.readDefault(), connector: () -> AdbTransport): Dadb {
+            val transportFactory =
+                object : AdbTransportFactory {
+                    override val description = description
+
+                    override fun connect(): AdbTransport = connector()
+                }
+            return DadbImpl(transportFactory = transportFactory, keyPair = keyPair)
+        }
+
+        @JvmStatic
+        @JvmOverloads
         fun discover(host: String = "localhost", keyPair: AdbKeyPair? = AdbKeyPair.readDefault(), connectTimeout: Int = 0, socketTimeout: Int = 0, keepAlive: Boolean = false): Dadb? {
             return list(host, keyPair, connectTimeout, socketTimeout, keepAlive).firstOrNull()
         }
@@ -296,7 +312,7 @@ interface Dadb : AutoCloseable {
 
         private fun restartAdb(dadb: Dadb, destination: String): String {
             dadb.open(destination).use { stream ->
-                return stream.source.readUntil('\n'.toByte()).readString(Charsets.UTF_8)
+                return stream.source.readUntil('\n'.code.toByte()).readString(Charsets.UTF_8)
             }
         }
 

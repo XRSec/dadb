@@ -6,7 +6,8 @@
 
 <img src="https://user-images.githubusercontent.com/847683/143626125-5872bdd8-180e-48bb-a64f-47b3688a086d.png" width="700px" />
 
-A Kotlin/Java library to connect directly to an Android device without an adb binary or an ADB server
+A Kotlin/Java library to connect directly to an Android device without an adb binary or an ADB server.
+The core `dadb` artifact is a JVM library. Platform-specific transports can be added separately.
 
 ```kotlin
 dependencies {
@@ -14,7 +15,7 @@ dependencies {
 }
 ```
 
-### Example Usage
+### Direct TCP
 
 Connect to `emulator-5554` and install `apkFile`:
 
@@ -25,6 +26,38 @@ Dadb.create("localhost", 5555).use { dadb ->
 ```
 
 *Note: Connect to the odd adb daemon port (5555), not the even emulator console port (5554)*
+
+### Android USB
+
+If you are running on Android and have access to USB host APIs, add the Android transport module:
+
+```kotlin
+implementation("dev.mobile:dadb-android:<version>")
+```
+
+Then create a direct USB transport from `UsbManager` and `UsbDevice`:
+
+```kotlin
+val dadb = Dadb.create(
+    transportFactory = UsbTransportFactory(usbManager, usbDevice, "usb:${usbDevice.deviceName}"),
+    keyPair = AdbKeyPair.readDefault(),
+)
+```
+
+This transport is Android-only. Desktop JVM users should use the core `dadb` artifact with direct TCP or `adb server`.
+
+### Using adb server
+
+If you already have an `adb server` available, you can connect through it instead of providing a direct transport.
+This is useful on desktop JVM environments where physical devices are already managed by `adb`.
+
+```kotlin
+val dadb = AdbServer.createDadb(
+    adbServerHost = "localhost",
+    adbServerPort = 5037,
+    deviceQuery = "host:transport:${serialNumber}"
+)
+```
 
 ### Discover a Device
 
@@ -41,11 +74,7 @@ Use the following API if you want to list all available devices:
 val dadbs = Dadb.list()
 ```
 
-### Connecting to a physical device
-
-*Prerequisite: Connecting to a physical device requires a running adb server. In most cases, this means that you must have the `adb` binary installed on your machine.*
-
-The `Dadb.discover()` and `Dadb.list()` methods now both support USB-connected devices.
+If an `adb server` is available, `Dadb.discover()` and `Dadb.list()` can also return USB-connected physical devices.
 
 ```kotlin
 // Both of these will include any USB-connected devices if they are available
@@ -53,14 +82,23 @@ val dadb = Dadb.discover()
 val dadbs = Dadb.list()
 ```
 
-If you'd like to connect directly to a physical device via its serial number. Use the following API:
+### Custom Transport
+
+If your ADB packets do not travel over TCP, Android USB host APIs, or `adb server`, you can still supply your own transport.
+This is useful for tunnels, in-process bridges, and other bidirectional byte streams.
 
 ```kotlin
-val dadb = AdbServer.createDadb(
-    adbServerHost = "localhost",
-    adbServerPort = 5037,
-    deviceQuery = "host:transport:${serialNumber}"
-)
+val dadb = Dadb.create(
+    description = "my transport",
+    keyPair = AdbKeyPair.readDefault(),
+) {
+    SourceSinkAdbTransport(
+        source = mySource,
+        sink = mySink,
+        description = "my transport",
+        closeable = myTransport,
+    )
+}
 ```
 
 ### Install / Uninstall APK

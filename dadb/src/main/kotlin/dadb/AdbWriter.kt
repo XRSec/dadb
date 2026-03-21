@@ -25,10 +25,10 @@ internal class AdbWriter(sink: Sink) : AutoCloseable {
 
     private val bufferedSink = sink.buffer()
 
-    fun writeConnect() = write(
+    fun writeConnect(maxData: Int = Constants.CONNECT_MAXDATA) = write(
             Constants.CMD_CNXN,
             Constants.CONNECT_VERSION,
-            Constants.CONNECT_MAXDATA,
+            maxData,
             Constants.CONNECT_PAYLOAD,
             0,
             Constants.CONNECT_PAYLOAD.size
