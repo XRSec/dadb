@@ -24,4 +24,5 @@ tasks.test {
 
 mavenPublishing {
     publishToMavenCentral(true)
+    signAllPublications()
 }

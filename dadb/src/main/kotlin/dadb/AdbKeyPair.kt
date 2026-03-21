@@ -24,14 +24,28 @@ import java.nio.ByteOrder
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
 import java.security.interfaces.RSAPublicKey
-import java.util.*
 import javax.crypto.Cipher
-
+import kotlin.io.encoding.Base64
 
 class AdbKeyPair(
-        private val privateKey: PrivateKey,
-        internal val publicKeyBytes: ByteArray
+    private val privateKey: PrivateKey,
+    internal val publicKeyBytes: ByteArray,
 ) {
+    /**
+     * Returns the private key backing this ADB identity.
+     *
+     * Exposing this avoids reflection for higher-level TLS and pairing helpers that need to build
+     * certificates or socket contexts from the same key material.
+     */
+    fun privateKey(): PrivateKey = privateKey
+
+    /**
+     * Returns the RSA public key in Android ADB wire format, including the trailing NUL byte.
+     *
+     * Exposing this avoids reflection for higher-level pairing and wireless-debugging helpers
+     * that need to send PEER_INFO without leaking the private key.
+     */
+    fun adbPublicKey(): ByteArray = publicKeyBytes.copyOf()
 
     internal fun signPayload(message: AdbMessage): ByteArray {
         val cipher = Cipher.getInstance("RSA/ECB/NoPadding")
@@ -41,32 +55,250 @@ class AdbKeyPair(
     }
 
     companion object {
-
+        private const val DEFAULT_PUBLIC_KEY_OWNER = "app@screen-remote"
         private const val KEY_LENGTH_BITS = 2048
         private const val KEY_LENGTH_BYTES = KEY_LENGTH_BITS / 8
         private const val KEY_LENGTH_WORDS = KEY_LENGTH_BYTES / 4
 
-        private val SIGNATURE_PADDING = ubyteArrayOf(
-            0x00u, 0x01u, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu,
-            0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0x00u,
-            0x30u, 0x21u, 0x30u, 0x09u, 0x06u, 0x05u, 0x2bu, 0x0eu, 0x03u, 0x02u, 0x1au, 0x05u, 0x00u,
-            0x04u, 0x14u
-        ).toByteArray()
+        private val SIGNATURE_PADDING =
+            ubyteArrayOf(
+                0x00u,
+                0x01u,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0xffu,
+                0x00u,
+                0x30u,
+                0x21u,
+                0x30u,
+                0x09u,
+                0x06u,
+                0x05u,
+                0x2bu,
+                0x0eu,
+                0x03u,
+                0x02u,
+                0x1au,
+                0x05u,
+                0x00u,
+                0x04u,
+                0x14u,
+            ).toByteArray()
 
         @JvmStatic
         fun readDefault(): AdbKeyPair {
@@ -82,41 +314,53 @@ class AdbKeyPair(
 
         @JvmStatic
         @JvmOverloads
-        fun read(privateKeyFile: File, publicKeyFile: File? = null): AdbKeyPair {
+        fun read(
+            privateKeyFile: File,
+            publicKeyFile: File? = null,
+        ): AdbKeyPair {
             val privateKey = PKCS8.parse(privateKeyFile.readBytes())
-            val publicKeyBytes = if (publicKeyFile?.exists() == true) {
-                readAdbPublicKey(publicKeyFile)
-            } else {
-                ByteArray(0)
-            }
+            val publicKeyBytes =
+                if (publicKeyFile?.exists() == true) {
+                    readAdbPublicKey(publicKeyFile)
+                } else {
+                    ByteArray(0)
+                }
 
             return AdbKeyPair(privateKey, publicKeyBytes)
         }
 
         @JvmStatic
-        fun generate(privateKeyFile: File, publicKeyFile: File) {
-            val keyPair = KeyPairGenerator.getInstance("RSA").let {
-                it.initialize(KEY_LENGTH_BITS)
-                it.genKeyPair()
-            }
+        @JvmOverloads
+        fun generate(
+            privateKeyFile: File,
+            publicKeyFile: File,
+            publicKeyOwner: String = DEFAULT_PUBLIC_KEY_OWNER,
+        ) {
+            val keyPair =
+                KeyPairGenerator.getInstance("RSA").let {
+                    it.initialize(KEY_LENGTH_BITS)
+                    it.genKeyPair()
+                }
 
             privateKeyFile.absoluteFile.parentFile?.mkdirs()
             publicKeyFile.absoluteFile.parentFile?.mkdirs()
 
             privateKeyFile.writer().use { out ->
-                val base64 = Base64.getMimeEncoder(64, "\n".toByteArray())
+                val base64 = Base64.Default.encode(keyPair.private.encoded).chunked(64).joinToString("\n")
                 out.write("-----BEGIN PRIVATE KEY-----\n")
-                out.write(base64.encodeToString(keyPair.private.encoded))
+                out.write(base64)
                 out.write("\n-----END PRIVATE KEY-----")
             }
 
             publicKeyFile.writer().use { out ->
-                val base64 = Base64.getEncoder()
                 val bytes = convertRsaPublicKeyToAdbFormat(keyPair.public as RSAPublicKey)
-                out.write(base64.encodeToString(bytes))
-                out.write(" unknown@unknown")
+                out.write(Base64.Default.encode(bytes))
+                out.write(" ${normalizePublicKeyOwner(publicKeyOwner)}")
             }
         }
+
+        private fun normalizePublicKeyOwner(publicKeyOwner: String): String =
+            publicKeyOwner.trim().ifBlank { DEFAULT_PUBLIC_KEY_OWNER }
 
         private fun readAdbPublicKey(file: File): ByteArray {
             val bytes = file.readBytes()
@@ -140,7 +384,7 @@ class AdbKeyPair(
              * } RSAPublicKey;
              */
 
-            /* ------ This part is a Java-ified version of RSA_to_RSAPublicKey from adb_host_auth.c ------ */
+            // ------ This part is a Java-ified version of RSA_to_RSAPublicKey from adb_host_auth.c ------
             val r32: BigInteger
             val r: BigInteger
             var rr: BigInteger
@@ -167,7 +411,7 @@ class AdbKeyPair(
                 myN[i] = rem.toInt()
             }
 
-            /* ------------------------------------------------------------------------------------------- */
+            // -------------------------------------------------------------------------------------------
             val bbuf: ByteBuffer = ByteBuffer.allocate(524).order(ByteOrder.LITTLE_ENDIAN)
             bbuf.putInt(KEY_LENGTH_WORDS)
             bbuf.putInt(n0inv.negate().toInt())

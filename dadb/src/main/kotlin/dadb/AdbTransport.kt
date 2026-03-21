@@ -44,6 +44,17 @@ interface AdbTransport : AutoCloseable {
         get() = javaClass.name
 }
 
+/**
+ * A transport that can upgrade the current raw socket/channel to TLS in-place after `A_STLS`.
+ *
+ * Wireless Debugging on modern Android starts as plain ADB, negotiates `A_STLS`, then upgrades
+ * the same underlying connection to TLS before continuing with normal ADB auth/CNXN messages.
+ */
+interface TlsUpgradableAdbTransport : AdbTransport {
+    @Throws(IOException::class)
+    fun upgradeToTls(version: Int = Constants.STLS_VERSION)
+}
+
 fun interface AdbTransportFactory {
 
     val description: String
@@ -72,6 +83,11 @@ class SourceSinkAdbTransport(
         if (!closed.compareAndSet(false, true)) {
             return
         }
-        closeable?.close()
+        if (closeable != null) {
+            closeable.close()
+            return
+        }
+        sink.close()
+        source.close()
     }
 }

@@ -19,6 +19,10 @@ package dadb
 
 import com.google.common.truth.Truth
 import okio.Buffer
+import okio.Source
+import okio.Timeout
+import java.net.SocketTimeoutException
+import kotlin.test.assertFailsWith
 import kotlin.test.Test
 
 internal class AdbStreamTest {
@@ -33,9 +37,164 @@ internal class AdbStreamTest {
         Truth.assertThat(stream.source.readByteArray()).isEqualTo(payload)
     }
 
+    @Test
+    fun peerCloseIsCleanEof() {
+        val source = Buffer().apply {
+            AdbWriter(this).write(Constants.CMD_CLSE, 2, 1, null, 0, 0)
+        }
+        val messageQueue = AdbMessageQueue(AdbReader(source))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(messageQueue, AdbWriter(Buffer()), 1024, 1, 2)
+
+        Truth.assertThat(stream.source.readByteArray()).isEqualTo(ByteArray(0))
+    }
+
+    @Test
+    fun socketFaultThrowsConnectionClosed() {
+        val messageQueue = AdbMessageQueue(AdbReader(Buffer()))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(messageQueue, AdbWriter(Buffer()), 1024, 1, 2)
+
+        assertFailsWith<AdbConnectionClosedException> { stream.source.readByteArray() }
+    }
+
+    @Test
+    fun readTimeoutThrowsAdbTimeout() {
+        val timingOutReader = AdbReader(object : Source {
+            override fun read(sink: Buffer, byteCount: Long): Long = throw SocketTimeoutException("Read timed out")
+            override fun timeout(): Timeout = Timeout.NONE
+            override fun close() = Unit
+        })
+        val messageQueue = AdbMessageQueue(timingOutReader)
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(messageQueue, AdbWriter(Buffer()), 1024, 1, 2)
+
+        assertFailsWith<AdbTimeoutException> { stream.source.readByteArray() }
+    }
+
+    @Test
+    fun sinkWaitsForOkayAfterWrite() {
+        val source = Buffer().apply {
+            AdbWriter(this).write(Constants.CMD_OKAY, 2, 1, null, 0, 0)
+        }
+        val writes = Buffer()
+        val messageQueue = AdbMessageQueue(AdbReader(source))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(messageQueue, AdbWriter(writes), 1024, 1, 2)
+
+        stream.sink.writeUtf8("hello")
+        stream.sink.flush()
+
+        val message = AdbReader(writes).readMessage()
+        Truth.assertThat(message.command).isEqualTo(Constants.CMD_WRTE)
+        Truth.assertThat(message.payload).isEqualTo("hello".toByteArray())
+    }
+
+    @Test
+    fun sinkFailsWhenOkayIsMissing() {
+        val writes = Buffer()
+        val messageQueue = AdbMessageQueue(AdbReader(Buffer()))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(messageQueue, AdbWriter(writes), 1024, 1, 2)
+
+        stream.sink.writeUtf8("hello")
+
+        val error = assertFailsWith<java.io.IOException> {
+            stream.sink.flush()
+        }
+
+        Truth.assertThat(error).isInstanceOf(AdbConnectionClosedException::class.java)
+        val wrte = AdbReader(writes).readMessage()
+        Truth.assertThat(wrte.command).isEqualTo(Constants.CMD_WRTE)
+        Truth.assertThat(writes.exhausted()).isTrue()
+    }
+
+    @Test
+    fun sourceDelayedAckAcknowledgesDeliveredPayload() {
+        val payload = "hello".toByteArray()
+        val writes = Buffer()
+        val messageQueue = AdbMessageQueue(createAdbReader(1, 2, payload))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(
+            messageQueue = messageQueue,
+            adbWriter = AdbWriter(writes),
+            maxPayloadSize = 1024,
+            localId = 1,
+            remoteId = 2,
+            delayedAckEnabled = true,
+        )
+
+        Truth.assertThat(stream.source.readByteArray()).isEqualTo(payload)
+
+        val ack = AdbReader(writes).readMessage()
+        Truth.assertThat(ack.command).isEqualTo(Constants.CMD_OKAY)
+        Truth.assertThat(Constants.decodeOkayAckBytes(ack, delayedAckEnabled = true)).isEqualTo(payload.size)
+        Truth.assertThat(writes.exhausted()).isTrue()
+    }
+
+    @Test
+    fun sinkDelayedAckSplitsWritesByAvailableWindow() {
+        val source = Buffer().apply {
+            AdbWriter(this).writeOkay(2, 1, 2)
+        }
+        val writes = Buffer()
+        val messageQueue = AdbMessageQueue(AdbReader(source))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(
+            messageQueue = messageQueue,
+            adbWriter = AdbWriter(writes),
+            maxPayloadSize = 1024,
+            localId = 1,
+            remoteId = 2,
+            delayedAckEnabled = true,
+            initialAvailableSendBytes = 3,
+        )
+
+        stream.sink.writeUtf8("hello")
+        stream.sink.flush()
+
+        val reader = AdbReader(writes)
+        val firstWrite = reader.readMessage()
+        val secondWrite = reader.readMessage()
+        Truth.assertThat(firstWrite.command).isEqualTo(Constants.CMD_WRTE)
+        Truth.assertThat(String(firstWrite.payload)).isEqualTo("hel")
+        Truth.assertThat(secondWrite.command).isEqualTo(Constants.CMD_WRTE)
+        Truth.assertThat(String(secondWrite.payload)).isEqualTo("lo")
+        Truth.assertThat(writes.exhausted()).isTrue()
+    }
+
+    @Test
+    fun sinkDelayedAckRejectsBareOkayPayload() {
+        val source = Buffer().apply {
+            AdbWriter(this).writeOkay(2, 1)
+        }
+        val writes = Buffer()
+        val messageQueue = AdbMessageQueue(AdbReader(source))
+        messageQueue.startListening(1)
+        val stream = AdbStreamImpl(
+            messageQueue = messageQueue,
+            adbWriter = AdbWriter(writes),
+            maxPayloadSize = 1024,
+            localId = 1,
+            remoteId = 2,
+            delayedAckEnabled = true,
+        )
+
+        stream.sink.writeUtf8("x")
+
+        val error = assertFailsWith<java.io.IOException> {
+            stream.sink.flush()
+        }
+
+        Truth.assertThat(error).hasMessageThat().contains("missing OKAY payload")
+        Truth.assertThat(writes.exhausted()).isTrue()
+    }
+
     private fun createAdbReader(localId: Int, remoteId: Int, writePayload: ByteArray): AdbReader {
         val source = Buffer()
-        AdbWriter(source).write(Constants.CMD_WRTE, remoteId, localId, writePayload, 0, writePayload.size)
+        val writer = AdbWriter(source)
+        writer.write(Constants.CMD_WRTE, remoteId, localId, writePayload, 0, writePayload.size)
+        writer.write(Constants.CMD_CLSE, remoteId, localId, null, 0, 0)
         return AdbReader(source)
     }
 }

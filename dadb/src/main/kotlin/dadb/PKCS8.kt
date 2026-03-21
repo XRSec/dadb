@@ -20,7 +20,7 @@ package dadb
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.spec.PKCS8EncodedKeySpec
-import java.util.*
+import kotlin.io.encoding.Base64
 
 internal object PKCS8 {
 
@@ -29,7 +29,7 @@ internal object PKCS8 {
 
     fun parse(bytes: ByteArray): PrivateKey {
         val string = String(bytes).replace(PREFIX, "").replace(SUFFIX, "").replace(Regex("\\s+"), "")
-        val encoded = Base64.getDecoder().decode(string)
+        val encoded = Base64.decode(string)
         val keyFactory = KeyFactory.getInstance("RSA")
         val keySpec = PKCS8EncodedKeySpec(encoded)
         return keyFactory.generatePrivate(keySpec)

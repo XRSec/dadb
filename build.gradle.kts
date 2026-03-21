@@ -4,10 +4,10 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
-    id("com.android.library") version "9.1.0" apply false
+    id("com.android.library") version "9.3.0" apply false
     id("com.adarshr.test-logger") version "4.0.0" apply false
-    id("com.vanniktech.maven.publish") version "0.36.0" apply false
-    kotlin("jvm") version "2.3.20" apply false
+    id("com.vanniktech.maven.publish") version "0.37.0" apply false
+    kotlin("jvm") version "2.4.10" apply false
 }
 
 allprojects {

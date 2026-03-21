@@ -3,12 +3,15 @@ package dadb
 import org.junit.jupiter.api.Test
 import java.net.Socket
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 internal class DadbTestImpl : DadbTest() {
 
+    private val endpoint = findTestEmulatorEndpoint()
+
     override fun localEmulator(body: (dadb: Dadb) -> Unit) {
-        val socket = Socket("localhost", 5555)
+        val socket = Socket(endpoint.host, endpoint.port)
         val keyPair = AdbKeyPair.readDefault()
         val connection = AdbConnection.connect(socket, keyPair)
         TestDadb(connection).use(body)
@@ -23,19 +26,21 @@ internal class DadbTestImpl : DadbTest() {
 
         override fun supportsFeature(feature: String) = connection.supportsFeature(feature)
 
+        override fun isTlsConnection() = connection.isTlsConnection()
+
         override fun close() = connection.close()
     }
 
     @Test
     fun validDefaultConstructorValues() {
-        val dadb = Dadb.create("localhost", 5555)
+        val dadb = Dadb.create(endpoint.host, endpoint.port)
         assertNotNull(dadb, "Unable to create Dadb object with default constructor values")
     }
 
 
     @Test
     fun validConstructorValues() {
-        val dadb = Dadb.create("localhost", 5555, connectTimeout = 1000, socketTimeout = 10000)
+        val dadb = Dadb.create(endpoint.host, endpoint.port, connectTimeout = 1000, socketTimeout = 10000)
         assertNotNull(dadb, "Unable to create Dadb object with valid constructor values")
     }
 
@@ -49,14 +54,26 @@ internal class DadbTestImpl : DadbTest() {
     @Test
     fun invalidconnectTimeoutConstructorValue() {
         assertFails("Invalid connectTimeout value was not validated") {
-            Dadb.create("localhost", 5555, connectTimeout = -1, socketTimeout = 0)
+            Dadb.create(endpoint.host, endpoint.port, connectTimeout = -1, socketTimeout = 0)
         }
     }
 
     @Test
     fun invalidSocketTimeoutConstructorValue() {
         assertFails("Invalid socketTimeout value was not validated") {
-            Dadb.create("localhost", 5555, connectTimeout = 0, socketTimeout = -1)
+            Dadb.create(endpoint.host, endpoint.port, connectTimeout = 0, socketTimeout = -1)
+        }
+    }
+
+    // AdbStreamOpenException is a direct-adbd concept; it lives here (direct connection) rather than
+    // in the shared DadbTest, because the adb-server path (AdbServerTest) still surfaces a generic
+    // IOException for a refused service (that path is out of scope for the error-model redesign).
+    @Test
+    fun open_invalidService_throwsStreamOpenException() {
+        localEmulator { dadb ->
+            assertFailsWith<AdbStreamOpenException> {
+                dadb.open("definitely-not-a-real-service:")
+            }
         }
     }
 

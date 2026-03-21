@@ -5,22 +5,56 @@ plugins {
 
 android {
     namespace = "dadb.android"
-    compileSdk = 36
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
+    ndkVersion = "30.0.15729638"
 
     defaultConfig {
         minSdk = 23
+
+        @Suppress("UnstableApiUsage")
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+                arguments +=
+                    listOf(
+                        "-DANDROID_STL=c++_shared",
+                        "-DANDROID_PLATFORM=android-23",
+                    )
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab = true
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    externalNativeBuild {
+        cmake {
+            path =
+                project.layout.projectDirectory
+                    .file("src/main/cpp/CMakeLists.txt")
+                    .asFile
+            version = "4.1.2"
+        }
+    }
 }
 
 dependencies {
     api(project(":dadb"))
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.85")
+    implementation("io.github.vvb2060.ndk:boringssl:20251124")
+    //noinspection Aligned16KB
+    implementation("org.conscrypt:conscrypt-android:2.6.1")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260522")
 }
 
 mavenPublishing {

@@ -20,11 +20,13 @@ package dadb
 import com.google.common.truth.Truth.assertThat
 import okio.Buffer
 import okio.buffer
+import okio.sink
 import okio.source
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.*
@@ -126,10 +128,10 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
             val content = randomString()
 
             val source = ByteArrayInputStream(content.toByteArray()).source()
-            dadb.push(source, remotePath, 439, System.currentTimeMillis())
+            assertThat(dadb.push(source, remotePath, 439, System.currentTimeMillis())).isInstanceOf(SyncResult.Success::class.java)
 
             val buffer = Buffer()
-            dadb.pull(buffer, remotePath)
+            assertThat(dadb.pull(buffer, remotePath)).isInstanceOf(SyncResult.Success::class.java)
             val pulledContent = buffer.readString(StandardCharsets.UTF_8)
 
             assertThat(pulledContent).isEqualTo(content)
@@ -146,10 +148,10 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
             dadb.shell("rm -rf $remoteDir")
 
             val source = ByteArrayInputStream(content.toByteArray()).source()
-            dadb.push(source, remotePath, 439, System.currentTimeMillis())
+            assertThat(dadb.push(source, remotePath, 439, System.currentTimeMillis())).isInstanceOf(SyncResult.Success::class.java)
 
             val buffer = Buffer()
-            dadb.pull(buffer, remotePath)
+            assertThat(dadb.pull(buffer, remotePath)).isInstanceOf(SyncResult.Success::class.java)
             val pulledContent = buffer.readString(StandardCharsets.UTF_8)
 
             assertThat(pulledContent).isEqualTo(content)
@@ -164,7 +166,7 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
             dadb.shell("fallocate -l ${sizeMb}M $remotePath")
 
             val buffer = Buffer()
-            dadb.pull(buffer, remotePath)
+            assertThat(dadb.pull(buffer, remotePath)).isInstanceOf(SyncResult.Success::class.java)
             val pulledContent = buffer.readByteArray()
 
             assertThat(pulledContent).hasLength(sizeMb * 1024 * 1024)
@@ -177,10 +179,10 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
             val content = randomString()
             val localSrcFile = temporaryFolder.newFile().apply { writeText(content) }
 
-            dadb.push(localSrcFile, remotePathWithCJK, 439, System.currentTimeMillis())
+            assertThat(dadb.push(localSrcFile, remotePathWithCJK, 439, System.currentTimeMillis())).isInstanceOf(SyncResult.Success::class.java)
 
             val localDstFile = temporaryFolder.newFile()
-            dadb.pull(localDstFile, remotePathWithCJK)
+            assertThat(dadb.pull(localDstFile, remotePathWithCJK)).isInstanceOf(SyncResult.Success::class.java)
 
             assertThat(localDstFile.readText()).isEqualTo(content)
         }
@@ -192,10 +194,10 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
             val content = randomString()
             val localSrcFile = temporaryFolder.newFile().apply { writeText(content) }
 
-            dadb.push(localSrcFile, remotePath, 439, System.currentTimeMillis())
+            assertThat(dadb.push(localSrcFile, remotePath, 439, System.currentTimeMillis())).isInstanceOf(SyncResult.Success::class.java)
 
             val localDstFile = temporaryFolder.newFile()
-            dadb.pull(localDstFile, remotePath)
+            assertThat(dadb.pull(localDstFile, remotePath)).isInstanceOf(SyncResult.Success::class.java)
 
             assertThat(localDstFile.readText()).isEqualTo(content)
         }
@@ -204,7 +206,7 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     @Test
     fun install() {
         localEmulator { dadb ->
-            dadb.install(TestApk.FILE)
+            assertThat(dadb.install(TestApk.FILE)).isInstanceOf(InstallResult.Success::class.java)
             val response = dadb.shell("pm list packages ${TestApk.PACKAGE_NAME}")
             assertShellResponse(response, 0, "package:${TestApk.PACKAGE_NAME}\n")
         }
@@ -214,7 +216,7 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     fun installStream() {
         localEmulator { dadb ->
             val inputStream = FileInputStream(TestApk.FILE).source()
-            dadb.install(inputStream, TestApk.FILE.length())
+            assertThat(dadb.install(inputStream, TestApk.FILE.length())).isInstanceOf(InstallResult.Success::class.java)
             val response = dadb.shell("pm list packages ${TestApk.PACKAGE_NAME}")
             assertShellResponse(response, 0, "package:${TestApk.PACKAGE_NAME}\n")
         }
@@ -223,7 +225,7 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     @Test
     fun installMultiple() {
         localEmulator { dadb ->
-            dadb.installMultiple(TestApk.SPLIT_FILES)
+            assertThat(dadb.installMultiple(TestApk.SPLIT_FILES)).isInstanceOf(InstallResult.Success::class.java)
             val response = dadb.shell("pm path ${TestApk.SPLIT_PACKAGE_NAME} | wc -l")
             assertShellResponse(response, 0, "${TestApk.SPLIT_FILES.size}\n")
         }
@@ -232,12 +234,12 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     @Test
     internal fun install_grantPermissions() {
         localEmulator { dadb ->
-            dadb.install(TestApk.FILE)
+            assertThat(dadb.install(TestApk.FILE)).isInstanceOf(InstallResult.Success::class.java)
             var response = dadb.shell("dumpsys package ${TestApk.PACKAGE_NAME}")
             assertThat(response.exitCode).isEqualTo(0)
             assertThat(response.output).doesNotContain("android.permission.RECORD_AUDIO: granted=true")
 
-            dadb.install(TestApk.FILE, "-g")
+            assertThat(dadb.install(TestApk.FILE, "-g")).isInstanceOf(InstallResult.Success::class.java)
             response = dadb.shell("dumpsys package ${TestApk.PACKAGE_NAME}")
             assertThat(response.exitCode).isEqualTo(0)
             assertThat(response.output).contains("android.permission.RECORD_AUDIO: granted=true")
@@ -247,8 +249,8 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     @Test
     fun uninstall() {
         localEmulator { dadb ->
-            dadb.install(TestApk.FILE)
-            dadb.uninstall(TestApk.PACKAGE_NAME)
+            assertThat(dadb.install(TestApk.FILE)).isInstanceOf(InstallResult.Success::class.java)
+            assertThat(dadb.uninstall(TestApk.PACKAGE_NAME)).isInstanceOf(UninstallResult.Success::class.java)
             val response = dadb.shell("pm list packages ${TestApk.PACKAGE_NAME}")
             assertShellResponse(response, 0, "")
         }
@@ -287,11 +289,82 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
         }
     }
 
+    @Test
+    fun tcpForward_remoteDestinationString() {
+        localEmulator { dadb ->
+            dadb.tcpForward(8888, "tcp:8888").use { _ ->
+                val future = broadcastSingleMessage(dadb, "OK", 8888)
+                val result = readSocket("localhost", 8888)
+
+                future.get(1, TimeUnit.SECONDS)
+
+                assertThat(result).isEqualTo("OK\n")
+            }
+        }
+    }
+
+    @Test
+    fun forward_reportsRunningState() {
+        localEmulator { dadb ->
+            val forwarder = dadb.forward(8888, "tcp:8888")
+            assertThat(forwarder.isRunning()).isTrue()
+
+            forwarder.close()
+
+            assertThat(forwarder.isRunning()).isFalse()
+        }
+    }
+
+    @Test
+    fun reverseForward_tcpDeviceToTcpHost() {
+        localEmulator { dadb ->
+            val devicePort = 8890
+            val reverseOutputPath = "/data/local/tmp/dadb-reverse-output"
+            ServerSocket(0).use { server ->
+                val hostPort = server.localPort
+                dadb.reverseForward(devicePort, hostPort)
+
+                try {
+                    val hostToDevice =
+                        executor.submit(
+                            Callable {
+                                server.accept().use { socket ->
+                                    socket.sink().buffer().use { sink ->
+                                        sink.writeUtf8("PONG\n")
+                                        sink.flush()
+                                    }
+                                }
+                            },
+                        )
+                    dadb.shell("rm -f $reverseOutputPath && nc 127.0.0.1 $devicePort > $reverseOutputPath")
+                    hostToDevice.get(5, TimeUnit.SECONDS)
+                    val deviceOutput = dadb.shell("cat $reverseOutputPath")
+                    assertShellResponse(deviceOutput, 0, "PONG\n")
+
+                    val deviceToHost =
+                        executor.submit(
+                            Callable {
+                                server.accept().use { socket ->
+                                    socket.source().buffer().readUtf8LineStrict()
+                                }
+                            },
+                        )
+                    val sendResponse = dadb.shell("echo -e 'PING' | nc 127.0.0.1 $devicePort")
+                    assertThat(sendResponse.exitCode).isEqualTo(0)
+                    assertThat(deviceToHost.get(5, TimeUnit.SECONDS)).isEqualTo("PING")
+                } finally {
+                    runCatching { dadb.shell("rm -f $reverseOutputPath") }
+                    runCatching { dadb.reverseKillForward("tcp:$devicePort") }
+                }
+            }
+        }
+    }
+
     @Ignore
     @Test
     fun root() {
-        localEmulator(Dadb::unroot)
-        localEmulator(Dadb::root)
+        localEmulator { assertThat(it.unroot()).isInstanceOf(RootResult.Success::class.java) }
+        localEmulator { assertThat(it.root()).isInstanceOf(RootResult.Success::class.java) }
         localEmulator { dadb ->
             val response = dadb.shell("getprop service.adb.root")
             assertShellResponse(response, 0, "1\n")
@@ -301,8 +374,8 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
     @Ignore
     @Test
     fun unroot() {
-        localEmulator(Dadb::root)
-        localEmulator(Dadb::unroot)
+        localEmulator { assertThat(it.root()).isInstanceOf(RootResult.Success::class.java) }
+        localEmulator { assertThat(it.unroot()).isInstanceOf(RootResult.Success::class.java) }
         localEmulator { dadb ->
             val response = dadb.shell("getprop service.adb.root")
             assertShellResponse(response, 0, "0\n")

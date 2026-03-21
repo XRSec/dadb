@@ -80,6 +80,7 @@ internal class AdbMessage(
     private fun commandStr() = when (command) {
         Constants.CMD_AUTH -> "AUTH";
         Constants.CMD_CNXN -> "CNXN";
+        Constants.CMD_STLS -> "STLS";
         Constants.CMD_OPEN -> "OPEN";
         Constants.CMD_OKAY -> "OKAY";
         Constants.CMD_CLSE -> "CLSE";
