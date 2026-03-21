@@ -33,6 +33,22 @@ class AdbKeyPair(
         internal val publicKeyBytes: ByteArray
 ) {
 
+    /**
+     * Returns the private key backing this ADB identity.
+     *
+     * Exposing this avoids reflection for higher-level TLS and pairing helpers that need to build
+     * certificates or socket contexts from the same key material.
+     */
+    fun privateKey(): PrivateKey = privateKey
+
+    /**
+     * Returns the RSA public key in Android ADB wire format, including the trailing NUL byte.
+     *
+     * Exposing this avoids reflection for higher-level pairing and wireless-debugging helpers
+     * that need to send PEER_INFO without leaking the private key.
+     */
+    fun adbPublicKey(): ByteArray = publicKeyBytes.copyOf()
+
     internal fun signPayload(message: AdbMessage): ByteArray {
         val cipher = Cipher.getInstance("RSA/ECB/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, privateKey)

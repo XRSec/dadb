@@ -43,6 +43,15 @@ internal class AdbWriter(sink: Sink) : AutoCloseable {
             authPayload.size
     )
 
+    fun writeStls(version: Int = Constants.STLS_VERSION) = write(
+            Constants.CMD_STLS,
+            version,
+            0,
+            null,
+            0,
+            0
+    )
+
     fun writeOpen(localId: Int, destination: String) {
         val destinationBytes = destination.toByteArray()
         val buffer = ByteBuffer.allocate(destinationBytes.size + 1)

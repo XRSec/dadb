@@ -30,6 +30,8 @@ interface Dadb : AutoCloseable {
 
     fun supportsFeature(feature: String): Boolean
 
+    fun isTlsConnection(): Boolean
+
     @Throws(IOException::class)
     fun shell(command: String): AdbShellResponse {
         openShell(command).use { stream ->

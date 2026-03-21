@@ -25,6 +25,7 @@ internal object Constants {
 
     const val CMD_AUTH = 0x48545541
     const val CMD_CNXN = 0x4e584e43
+    const val CMD_STLS = 0x534c5453
     const val CMD_OPEN = 0x4e45504f
     const val CMD_OKAY = 0x59414b4f
     const val CMD_CLSE = 0x45534c43
@@ -32,6 +33,7 @@ internal object Constants {
 
     const val CONNECT_VERSION = 0x01000000
     const val CONNECT_MAXDATA = 1024 * 1024
+    const val STLS_VERSION = 0x01000000
 
     val CONNECT_PAYLOAD = "host::\u0000".toByteArray()
 }

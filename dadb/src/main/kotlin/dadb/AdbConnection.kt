@@ -32,7 +32,8 @@ internal class AdbConnection internal constructor(
         private val closeable: AutoCloseable?,
         private val supportedFeatures: Set<String>,
         private val version: Int,
-        private val maxPayloadSize: Int
+        private val maxPayloadSize: Int,
+        private val tlsUpgraded: Boolean,
 ) : AutoCloseable {
 
     private val random = Random()
@@ -55,6 +56,10 @@ internal class AdbConnection internal constructor(
 
     fun supportsFeature(feature: String): Boolean {
         return supportedFeatures.contains(feature)
+    }
+
+    fun isTlsConnection(): Boolean {
+        return tlsUpgraded
     }
 
     private fun newId(): Int {
@@ -89,6 +94,7 @@ internal class AdbConnection internal constructor(
                 keyPair,
                 closeable = transport,
                 connectMaxData = transport.connectMaxData,
+                tlsUpgradableTransport = transport as? TlsUpgradableAdbTransport,
             )
         }
 
@@ -98,12 +104,13 @@ internal class AdbConnection internal constructor(
             keyPair: AdbKeyPair? = null,
             closeable: AutoCloseable? = null,
             connectMaxData: Int = Constants.CONNECT_MAXDATA,
+            tlsUpgradableTransport: TlsUpgradableAdbTransport? = null,
         ): AdbConnection {
             val adbReader = AdbReader(source)
             val adbWriter = AdbWriter(sink)
 
             try {
-                return connect(adbReader, adbWriter, keyPair, closeable, connectMaxData)
+                return connect(adbReader, adbWriter, keyPair, closeable, connectMaxData, tlsUpgradableTransport)
             } catch (t: Throwable) {
                 adbReader.close()
                 adbWriter.close()
@@ -117,22 +124,38 @@ internal class AdbConnection internal constructor(
             keyPair: AdbKeyPair?,
             closeable: AutoCloseable?,
             connectMaxData: Int,
+            tlsUpgradableTransport: TlsUpgradableAdbTransport?,
         ): AdbConnection {
-            adbWriter.writeConnect(connectMaxData)
+            var currentReader = adbReader
+            var currentWriter = adbWriter
+            var tlsUpgraded = false
+            currentWriter.writeConnect(connectMaxData)
 
-            var message = adbReader.readMessage()
+            var message = currentReader.readMessage()
+
+            if (message.command == Constants.CMD_STLS) {
+                checkNotNull(tlsUpgradableTransport) {
+                    "TLS upgrade requested by device, but transport does not support STLS/TLS upgrade"
+                }
+                currentWriter.writeStls(message.arg0)
+                tlsUpgradableTransport.upgradeToTls(message.arg0)
+                tlsUpgraded = true
+                currentReader = AdbReader(tlsUpgradableTransport.source)
+                currentWriter = AdbWriter(tlsUpgradableTransport.sink)
+                message = currentReader.readMessage()
+            }
 
             if (message.command == Constants.CMD_AUTH) {
                 checkNotNull(keyPair) { "Authentication required but no KeyPair provided" }
                 check(message.arg0 == Constants.AUTH_TYPE_TOKEN) { "Unsupported auth type: $message" }
 
                 val signature = keyPair.signPayload(message)
-                adbWriter.writeAuth(Constants.AUTH_TYPE_SIGNATURE, signature)
+                currentWriter.writeAuth(Constants.AUTH_TYPE_SIGNATURE, signature)
 
-                message = adbReader.readMessage()
+                message = currentReader.readMessage()
                 if (message.command == Constants.CMD_AUTH) {
-                    adbWriter.writeAuth(Constants.AUTH_TYPE_RSA_PUBLIC, keyPair.publicKeyBytes)
-                    message = adbReader.readMessage()
+                    currentWriter.writeAuth(Constants.AUTH_TYPE_RSA_PUBLIC, keyPair.publicKeyBytes)
+                    message = currentReader.readMessage()
                 }
             }
 
@@ -142,7 +165,7 @@ internal class AdbConnection internal constructor(
             val version = message.arg0
             val maxPayloadSize = message.arg1
 
-            return AdbConnection(adbReader, adbWriter, closeable, connectionString.features, version, maxPayloadSize)
+            return AdbConnection(currentReader, currentWriter, closeable, connectionString.features, version, maxPayloadSize, tlsUpgraded)
         }
 
         // ie: "device::ro.product.name=sdk_gphone_x86;ro.product.model=Android SDK built for x86;ro.product.device=generic_x86;features=fixed_push_symlink_timestamp,apex,fixed_push_mkdir,stat_v2,abb_exec,cmd,abb,shell_v2"

@@ -73,6 +73,10 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
         return connection().supportsFeature(feature)
     }
 
+    override fun isTlsConnection(): Boolean {
+        return connection().isTlsConnection()
+    }
+
     override fun close() {
         connection?.first?.close()
     }

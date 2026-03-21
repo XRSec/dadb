@@ -161,6 +161,10 @@ private class AdbServerDadb constructor(
         return feature in supportedFeatures
     }
 
+    override fun isTlsConnection(): Boolean {
+        return false
+    }
+
     override fun close() {}
 
     override fun toString(): String {

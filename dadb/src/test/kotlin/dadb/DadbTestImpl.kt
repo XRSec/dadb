@@ -23,6 +23,8 @@ internal class DadbTestImpl : DadbTest() {
 
         override fun supportsFeature(feature: String) = connection.supportsFeature(feature)
 
+        override fun isTlsConnection() = connection.isTlsConnection()
+
         override fun close() = connection.close()
     }
 
