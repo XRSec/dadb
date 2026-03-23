@@ -1,5 +1,7 @@
 package dadb.android.runtime
 
+import dadb.android.tls.AdbTlsCertificatePins
+import dadb.android.tls.AdbTlsPinMismatchException
 import java.math.BigInteger
 import java.security.KeyPairGenerator
 import java.security.Principal
@@ -8,6 +10,7 @@ import java.security.cert.CertificateEncodingException
 import java.security.cert.X509Certificate
 import java.util.Date
 import javax.net.ssl.X509ExtendedTrustManager
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
 
@@ -74,6 +77,40 @@ class AdbTlsTrustPolicyTest {
                 .resolveTrustManager(target = AdbNetworkEndpoint(host = "192.168.0.10", port = 37099))
 
         assertSame(customTrustManager, trustManager)
+    }
+
+    @Test
+    fun pinned_policy_acceptsMatchingPin() {
+        val certificate = fakeCertificate(generatePublicKey())
+        val expectedPin = AdbTlsCertificatePins.publicKeySha256Base64(certificate)
+        val trustManager =
+            AdbTlsTrustPolicy.Pinned(expectedPin)
+                .resolveTrustManager(target = AdbNetworkEndpoint(host = "192.168.0.10", port = 37099))
+
+        trustManager.checkServerTrusted(arrayOf(certificate), "RSA")
+    }
+
+    @Test
+    fun pinned_policy_rejectsMismatchedPin() {
+        val certificate = fakeCertificate(generatePublicKey())
+        val trustManager =
+            AdbTlsTrustPolicy.Pinned("expected-pin")
+                .resolveTrustManager(target = AdbNetworkEndpoint(host = "192.168.0.10", port = 37099))
+
+        val error =
+            try {
+                trustManager.checkServerTrusted(arrayOf(certificate), "RSA")
+                null
+            } catch (t: AdbTlsPinMismatchException) {
+                t
+            }
+
+        requireNotNull(error)
+        assertEquals("expected-pin", error.expectedPinSha256Base64)
+        assertEquals(
+            AdbTlsCertificatePins.publicKeySha256Base64(certificate),
+            error.observedPinSha256Base64,
+        )
     }
 
     private fun generatePublicKey(): PublicKey =

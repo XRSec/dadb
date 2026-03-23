@@ -14,6 +14,8 @@ import okio.Sink
 import okio.Source
 import okio.sink
 import okio.source
+import okio.Buffer
+import okio.Timeout
 
 /**
  * STLS-aware ADB transport for Wireless Debugging.
@@ -125,17 +127,15 @@ private class UpgradableTlsSocketAdbTransport(
             socketFactory.createSocket(currentSocket, host, port, true) as SSLSocket
 
         try {
-            sslSocket.useClientMode = true
-            sslSocket.soTimeout = socketTimeout
-            configureSocket(sslSocket)
+            AdbTlsSockets.configureClientSocket(sslSocket, socketTimeout, configureSocket)
             sslSocket.startHandshake()
             onHandshakeCompleted(sslSocket)
             currentSocket = sslSocket
-            currentSource = sslSocket.source()
-            currentSink = sslSocket.sink()
+            currentSource = TlsMappedSource(sslSocket.source())
+            currentSink = TlsMappedSink(sslSocket.sink())
         } catch (t: Throwable) {
             runCatching { sslSocket.close() }
-            throw t
+            throw AdbTlsErrorMapper.map(t)
         }
     }
 
@@ -145,4 +145,43 @@ private class UpgradableTlsSocketAdbTransport(
         }
         currentSocket.close()
     }
+}
+
+private class TlsMappedSource(
+    private val delegate: Source,
+) : Source {
+    override fun read(sink: Buffer, byteCount: Long): Long =
+        try {
+            delegate.read(sink, byteCount)
+        } catch (t: Throwable) {
+            throw AdbTlsErrorMapper.map(t)
+        }
+
+    override fun timeout(): Timeout = delegate.timeout()
+
+    override fun close() = delegate.close()
+}
+
+private class TlsMappedSink(
+    private val delegate: Sink,
+) : Sink {
+    override fun write(source: Buffer, byteCount: Long) {
+        try {
+            delegate.write(source, byteCount)
+        } catch (t: Throwable) {
+            throw AdbTlsErrorMapper.map(t)
+        }
+    }
+
+    override fun flush() {
+        try {
+            delegate.flush()
+        } catch (t: Throwable) {
+            throw AdbTlsErrorMapper.map(t)
+        }
+    }
+
+    override fun timeout(): Timeout = delegate.timeout()
+
+    override fun close() = delegate.close()
 }

@@ -20,11 +20,13 @@ package dadb
 import com.google.common.truth.Truth.assertThat
 import okio.Buffer
 import okio.buffer
+import okio.sink
 import okio.source
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.*
@@ -283,6 +285,77 @@ internal abstract class DadbTest : BaseConcurrencyTest() {
 
                 assertThat(first).isEqualTo("OK\n")
                 assertThat(second).isEqualTo("OK\n")
+            }
+        }
+    }
+
+    @Test
+    fun tcpForward_remoteDestinationString() {
+        localEmulator { dadb ->
+            dadb.tcpForward(8888, "tcp:8888").use { _ ->
+                val future = broadcastSingleMessage(dadb, "OK", 8888)
+                val result = readSocket("localhost", 8888)
+
+                future.get(1, TimeUnit.SECONDS)
+
+                assertThat(result).isEqualTo("OK\n")
+            }
+        }
+    }
+
+    @Test
+    fun forward_reportsRunningState() {
+        localEmulator { dadb ->
+            val forwarder = dadb.forward(8888, "tcp:8888")
+            assertThat(forwarder.isRunning()).isTrue()
+
+            forwarder.close()
+
+            assertThat(forwarder.isRunning()).isFalse()
+        }
+    }
+
+    @Test
+    fun reverseForward_tcpDeviceToTcpHost() {
+        localEmulator { dadb ->
+            val devicePort = 8890
+            val reverseOutputPath = "/data/local/tmp/dadb-reverse-output"
+            ServerSocket(0).use { server ->
+                val hostPort = server.localPort
+                dadb.reverseForward(devicePort, hostPort)
+
+                try {
+                    val hostToDevice =
+                        executor.submit(
+                            Callable {
+                                server.accept().use { socket ->
+                                    socket.sink().buffer().use { sink ->
+                                        sink.writeUtf8("PONG\n")
+                                        sink.flush()
+                                    }
+                                }
+                            },
+                        )
+                    dadb.shell("rm -f $reverseOutputPath && nc 127.0.0.1 $devicePort > $reverseOutputPath")
+                    hostToDevice.get(5, TimeUnit.SECONDS)
+                    val deviceOutput = dadb.shell("cat $reverseOutputPath")
+                    assertShellResponse(deviceOutput, 0, "PONG\n")
+
+                    val deviceToHost =
+                        executor.submit(
+                            Callable {
+                                server.accept().use { socket ->
+                                    socket.source().buffer().readUtf8LineStrict()
+                                }
+                            },
+                        )
+                    val sendResponse = dadb.shell("echo -e 'PING' | nc 127.0.0.1 $devicePort")
+                    assertThat(sendResponse.exitCode).isEqualTo(0)
+                    assertThat(deviceToHost.get(5, TimeUnit.SECONDS)).isEqualTo("PING")
+                } finally {
+                    runCatching { dadb.shell("rm -f $reverseOutputPath") }
+                    runCatching { dadb.reverseKillForward("tcp:$devicePort") }
+                }
             }
         }
     }

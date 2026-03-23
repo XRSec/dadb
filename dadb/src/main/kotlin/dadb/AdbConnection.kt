@@ -17,14 +17,18 @@
 
 package dadb
 
+import dadb.forwarding.StreamForwarder
 import okio.Sink
 import okio.Source
+import okio.buffer
 import okio.sink
 import okio.source
 import org.jetbrains.annotations.TestOnly
 import java.io.IOException
 import java.net.Socket
 import java.util.*
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.concurrent.thread
 
 internal class AdbConnection internal constructor(
         adbReader: AdbReader,
@@ -38,16 +42,38 @@ internal class AdbConnection internal constructor(
 
     private val random = Random()
     private val messageQueue = AdbMessageQueue(adbReader)
+    private val reverseSessionThreads = ConcurrentLinkedQueue<Thread>()
+    private val delayedAckEnabled = supportedFeatures.contains(Constants.FEATURE_DELAYED_ACK)
+
+    @Volatile
+    private var reverseThread: Thread? = null
+
+    @Volatile
+    private var closed = false
+
+    init {
+        startReverseBridgeLoop()
+    }
 
     @Throws(IOException::class)
     fun open(destination: String): AdbStream {
         val localId = newId()
         messageQueue.startListening(localId)
         try {
-            adbWriter.writeOpen(localId, destination)
+            val initialReceiveWindow = if (delayedAckEnabled) Constants.INITIAL_DELAYED_ACK_BYTES else 0
+            adbWriter.writeOpen(localId, destination, initialReceiveWindow)
             val message = messageQueue.take(localId, Constants.CMD_OKAY)
             val remoteId = message.arg0
-            return AdbStreamImpl(messageQueue, adbWriter, maxPayloadSize, localId, remoteId)
+            val initialAvailableSendBytes = Constants.decodeOkayAckBytes(message, delayedAckEnabled).toLong()
+            return AdbStreamImpl(
+                messageQueue = messageQueue,
+                adbWriter = adbWriter,
+                maxPayloadSize = maxPayloadSize,
+                localId = localId,
+                remoteId = remoteId,
+                delayedAckEnabled = delayedAckEnabled,
+                initialAvailableSendBytes = initialAvailableSendBytes,
+            )
         } catch (e: Throwable) {
             messageQueue.stopListening(localId)
             throw e
@@ -63,7 +89,11 @@ internal class AdbConnection internal constructor(
     }
 
     private fun newId(): Int {
-        return random.nextInt()
+        var id: Int
+        do {
+            id = random.nextInt()
+        } while (id == 0)
+        return id
     }
 
     @TestOnly
@@ -72,14 +102,124 @@ internal class AdbConnection internal constructor(
     }
 
     override fun close() {
+        closed = true
         try {
+            reverseThread?.interrupt()
+            reverseThread = null
+            while (true) {
+                val thread = reverseSessionThreads.poll() ?: break
+                thread.interrupt()
+            }
+            runCatching { messageQueue.stopListening(REVERSE_LISTENER_ID) }
             messageQueue.close()
             adbWriter.close()
             closeable?.close()
         } catch (ignore: Throwable) {}
     }
 
+    private fun startReverseBridgeLoop() {
+        messageQueue.startListening(REVERSE_LISTENER_ID)
+        reverseThread = thread(name = "dadb-reverse-accept") {
+            while (!Thread.currentThread().isInterrupted && !closed) {
+                try {
+                    val openMessage = messageQueue.take(REVERSE_LISTENER_ID, Constants.CMD_OPEN)
+                    handleIncomingReverseOpen(openMessage)
+                } catch (_: InterruptedException) {
+                    return@thread
+                } catch (_: AdbStreamClosed) {
+                    if (closed) {
+                        return@thread
+                    }
+                    messageQueue.startListening(REVERSE_LISTENER_ID)
+                } catch (t: Throwable) {
+                    if (!closed && !Thread.currentThread().isInterrupted) {
+                        log { "reverse bridge loop error: ${t.message}" }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleIncomingReverseOpen(message: AdbMessage) {
+        val destination = extractOpenDestination(message) ?: run {
+            adbWriter.writeClose(REVERSE_LISTENER_ID, message.arg0)
+            return
+        }
+
+        val target = parseReverseTcpTarget(destination) ?: run {
+            adbWriter.writeClose(REVERSE_LISTENER_ID, message.arg0)
+            return
+        }
+
+        val localSocket = runCatching { Socket(target.host, target.port) }.getOrElse {
+            adbWriter.writeClose(REVERSE_LISTENER_ID, message.arg0)
+            return
+        }
+
+        val localId = newId()
+        messageQueue.startListening(localId)
+        val initialReceiveWindow = if (delayedAckEnabled) Constants.INITIAL_DELAYED_ACK_BYTES else null
+        adbWriter.writeOkay(localId, message.arg0, initialReceiveWindow)
+
+        val initialAvailableSendBytes = if (delayedAckEnabled) {
+            message.arg1.toLong().coerceAtLeast(0)
+        } else {
+            0L
+        }
+        val adbStream = AdbStreamImpl(
+            messageQueue = messageQueue,
+            adbWriter = adbWriter,
+            maxPayloadSize = maxPayloadSize,
+            localId = localId,
+            remoteId = message.arg0,
+            delayedAckEnabled = delayedAckEnabled,
+            initialAvailableSendBytes = initialAvailableSendBytes,
+        )
+        val socketSource = localSocket.getInputStream().source()
+        val socketSink = localSocket.getOutputStream().sink().buffer()
+
+        val localToDevice = thread(name = "dadb-reverse-local-to-device") {
+            try {
+                StreamForwarder.transfer(socketSource, adbStream.sink)
+            } finally {
+                reverseSessionThreads.remove(Thread.currentThread())
+            }
+        }
+        reverseSessionThreads.add(localToDevice)
+
+        val deviceToLocal = thread(name = "dadb-reverse-device-to-local") {
+            try {
+                StreamForwarder.transfer(adbStream.source, socketSink)
+            } finally {
+                runCatching { adbStream.close() }
+                runCatching { localSocket.close() }
+                localToDevice.interrupt()
+                reverseSessionThreads.remove(Thread.currentThread())
+            }
+        }
+        reverseSessionThreads.add(deviceToLocal)
+    }
+
+    private fun extractOpenDestination(message: AdbMessage): String? {
+        if (message.payloadLength <= 0) {
+            return null
+        }
+
+        val endExclusive =
+            if (message.payload[message.payloadLength - 1].toInt() == 0) {
+                message.payloadLength - 1
+            } else {
+                message.payloadLength
+            }
+
+        if (endExclusive <= 0) {
+            return null
+        }
+
+        return String(message.payload, 0, endExclusive)
+    }
     companion object {
+        private const val REVERSE_LISTENER_ID = 0
 
         fun connect(socket: Socket, keyPair: AdbKeyPair? = null): AdbConnection {
             val source = socket.source()
@@ -106,7 +246,7 @@ internal class AdbConnection internal constructor(
             connectMaxData: Int = Constants.CONNECT_MAXDATA,
             tlsUpgradableTransport: TlsUpgradableAdbTransport? = null,
         ): AdbConnection {
-            val adbReader = AdbReader(source)
+            val adbReader = AdbReader(source, maxPayloadSize = Constants.MAX_PAYLOAD_V1)
             val adbWriter = AdbWriter(sink)
 
             try {
@@ -140,7 +280,7 @@ internal class AdbConnection internal constructor(
                 currentWriter.writeStls(message.arg0)
                 tlsUpgradableTransport.upgradeToTls(message.arg0)
                 tlsUpgraded = true
-                currentReader = AdbReader(tlsUpgradableTransport.source)
+                currentReader = AdbReader(tlsUpgradableTransport.source, maxPayloadSize = Constants.MAX_PAYLOAD_V1)
                 currentWriter = AdbWriter(tlsUpgradableTransport.sink)
                 message = currentReader.readMessage()
             }
@@ -162,21 +302,40 @@ internal class AdbConnection internal constructor(
             if (message.command != Constants.CMD_CNXN) throw IOException("Connection failed: $message")
 
             val connectionString = parseConnectionString(String(message.payload))
-            val version = message.arg0
-            val maxPayloadSize = message.arg1
+            val peerFeatures = connectionString.features
+            val version = minOf(message.arg0, Constants.CONNECT_VERSION)
+            val peerMaxPayloadSize = message.arg1
+            if (peerMaxPayloadSize <= 0) {
+                throw IOException("Peer maxdata must be > 0: $peerMaxPayloadSize")
+            }
+            val maxPayloadSize = minOf(peerMaxPayloadSize, connectMaxData)
+                    .coerceAtLeast(1)
+                    .coerceAtMost(Constants.CONNECT_MAXDATA)
+            currentReader.setMaxPayloadSize(maxPayloadSize)
+            currentWriter.updateProtocolVersion(version)
 
-            return AdbConnection(currentReader, currentWriter, closeable, connectionString.features, version, maxPayloadSize, tlsUpgraded)
+            return AdbConnection(currentReader, currentWriter, closeable, peerFeatures, version, maxPayloadSize, tlsUpgraded)
         }
 
         // ie: "device::ro.product.name=sdk_gphone_x86;ro.product.model=Android SDK built for x86;ro.product.device=generic_x86;features=fixed_push_symlink_timestamp,apex,fixed_push_mkdir,stat_v2,abb_exec,cmd,abb,shell_v2"
         private fun parseConnectionString(connectionString: String): ConnectionString {
             val keyValues = connectionString.substringAfter("device::")
                     .split(";")
-                    .map { it.split("=") }
-                    .mapNotNull { if (it.size != 2) null else it[0] to it[1] }
+                    .mapNotNull { property ->
+                        val delimiter = property.indexOf('=')
+                        if (delimiter <= 0 || delimiter == property.lastIndex) {
+                            null
+                        } else {
+                            property.substring(0, delimiter) to property.substring(delimiter + 1)
+                        }
+                    }
                     .toMap()
-            if ("features" !in keyValues) throw IOException("Failed to parse features from connection string: $connectionString")
-            val features = keyValues.getValue("features").split(",").toSet()
+            val features = keyValues["features"]
+                    ?.split(",")
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    ?.toSet()
+                    ?: emptySet()
             return ConnectionString(features)
         }
     }

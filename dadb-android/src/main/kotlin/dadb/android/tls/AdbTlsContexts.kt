@@ -88,6 +88,12 @@ internal object AdbTlsContexts {
                 socket: Socket?,
             ): String = keyAlias
 
+            override fun chooseEngineClientAlias(
+                keyType: Array<out String>?,
+                issuers: Array<out java.security.Principal>?,
+                engine: SSLEngine?,
+            ): String = keyAlias
+
             override fun getCertificateChain(alias: String?): Array<X509Certificate>? =
                 if (alias == keyAlias) {
                     arrayOf(certificate)
@@ -105,7 +111,7 @@ internal object AdbTlsContexts {
             override fun getClientAliases(
                 keyType: String?,
                 issuers: Array<out java.security.Principal>?,
-            ): Array<String>? = null
+            ): Array<String> = arrayOf(keyAlias)
 
             override fun getServerAliases(
                 keyType: String?,

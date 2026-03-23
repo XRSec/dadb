@@ -21,6 +21,7 @@ import dadb.adbserver.AdbServer
 import dadb.forwarding.TcpForwarder
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.FileSystems
 import okio.*
 
 interface Dadb : AutoCloseable {
@@ -34,15 +35,45 @@ interface Dadb : AutoCloseable {
 
     @Throws(IOException::class)
     fun shell(command: String): AdbShellResponse {
-        openShell(command).use { stream ->
-            return stream.readAll()
+        return if (supportsFeature(SHELL_V2_FEATURE)) {
+            openShell(command).use { stream ->
+                stream.readAll()
+            }
+        } else {
+            open(buildShellService(command, useShellProtocol = false)).use { stream ->
+                AdbShellResponse(
+                    output = stream.source.readString(Charsets.UTF_8),
+                    errorOutput = "",
+                    exitCode = 0,
+                )
+            }
         }
     }
 
     @Throws(IOException::class)
     fun openShell(command: String = ""): AdbShellStream {
-        val stream = open("shell,v2,raw:$command")
+        requireShellV2("openShell")
+        val stream = open(buildShellService(command, useShellProtocol = true))
         return AdbShellStream(stream)
+    }
+
+    private fun requireShellV2(apiName: String) {
+        check(supportsFeature(SHELL_V2_FEATURE)) {
+            "$apiName requires peer feature '$SHELL_V2_FEATURE'; use shell(command) for legacy shell fallback."
+        }
+    }
+
+    private fun buildShellService(
+        command: String,
+        useShellProtocol: Boolean,
+    ): String {
+        val args = mutableListOf<String>()
+        if (useShellProtocol) {
+            args += SHELL_ARG_V2
+            args += SHELL_TYPE_RAW
+        }
+        val prefix = if (args.isEmpty()) SHELL_SERVICE_BASE else "$SHELL_SERVICE_BASE,${args.joinToString(",")}"
+        return "$prefix:$command"
     }
 
     @Throws(IOException::class)
@@ -72,7 +103,8 @@ interface Dadb : AutoCloseable {
     @Throws(IOException::class)
     fun openSync(): AdbSyncStream {
         val stream = open("sync:")
-        return AdbSyncStream(stream)
+        val features = SYNC_FEATURES.filter(::supportsFeature).toSet()
+        return AdbSyncStream(stream, features)
     }
 
     @Throws(IOException::class)
@@ -97,24 +129,71 @@ interface Dadb : AutoCloseable {
             }
         } else {
             val tempFile = kotlin.io.path.createTempFile()
-            val fileSink = tempFile.sink().buffer()
-            fileSink.writeAll(source)
-            fileSink.flush()
-            pmInstall(tempFile.toFile(), *options)
+            try {
+                tempFile.sink().buffer().use { fileSink ->
+                    fileSink.writeAll(source)
+                    fileSink.flush()
+                }
+                pmInstall(tempFile.toFile(), *options)
+            } finally {
+                tempFile.toFile().delete()
+            }
         }
     }
 
     private fun pmInstall(file: File, vararg options: String) {
         val fileName = file.name
         val remotePath = "/data/local/tmp/$fileName"
-        push(file, remotePath)
-        shell("pm install ${options.joinToString(" ")} \"$remotePath\"")
+        try {
+            push(file, remotePath)
+            shell("pm install ${options.joinToString(" ")} \"$remotePath\"")
+        } finally {
+            runCatching {
+                shell("rm -f \"$remotePath\"")
+            }
+        }
     }
 
     @Throws(IOException::class)
     fun installMultiple(apks: List<File>, vararg options: String) {
         // http://aospxref.com/android-12.0.0_r3/xref/packages/modules/adb/client/adb_install.cpp#538
-        if (supportsFeature("cmd")) {
+        if (supportsFeature("abb_exec")) {
+            val totalLength = apks.sumOf { it.length() }
+            abbExec("package", "install-create", "-S", totalLength.toString(), *options).use { createStream ->
+                val response = createStream.source.readString(Charsets.UTF_8)
+                if (!response.startsWith("Success")) {
+                    throw IOException("connect error for create: $response")
+                }
+                val pattern = """\[(\w+)]""".toRegex()
+                val sessionId = pattern.find(response)?.groups?.get(1)?.value ?: throw IOException("failed to create session")
+
+                var error: String? = null
+                apks.forEach { apk ->
+                    abbExec("package", "install-write", "-S", apk.length().toString(), sessionId, apk.name, "-", *options).use { writeStream ->
+                        writeStream.sink.writeAll(apk.source())
+                        writeStream.sink.flush()
+
+                        val writeResponse = writeStream.source.readString(Charsets.UTF_8)
+                        if (!writeResponse.startsWith("Success")) {
+                            error = writeResponse
+                            return@forEach
+                        }
+                    }
+                }
+
+                val finalCommand = if (error == null) "install-commit" else "install-abandon"
+                abbExec("package", finalCommand, sessionId, *options).use { commitStream ->
+                    val finalResponse = commitStream.source.readString(Charsets.UTF_8)
+                    if (!finalResponse.startsWith("Success")) {
+                        throw IOException("failed to finalize session: $commitStream")
+                    }
+                }
+
+                if (error != null) {
+                    throw IOException("Install failed: $error")
+                }
+            }
+        } else if (supportsFeature("cmd")) {
             val totalLength = apks.map { it.length() }.reduce { acc, l ->  acc + l }
             execCmd("package", "install-create", "-S", totalLength.toString(), *options).use { createStream ->
                 val response = createStream.source.readString(Charsets.UTF_8)
@@ -240,18 +319,90 @@ interface Dadb : AutoCloseable {
         waitRootOrClose(this, root = false)
     }
 
-    @Throws(InterruptedException::class)
-    fun tcpForward(hostPort: Int, targetPort: Int): AutoCloseable {
-        val forwarder = TcpForwarder(this, hostPort, targetPort)
+    @Throws(IOException::class, InterruptedException::class)
+    fun tcpForward(hostPort: Int, targetPort: Int): PortForwarder {
+        return forward(hostPort, "tcp:$targetPort")
+    }
+
+    @Throws(IOException::class, InterruptedException::class)
+    fun tcpForward(hostPort: Int, remoteDestination: String): PortForwarder {
+        return forward(hostPort, remoteDestination)
+    }
+
+    @Throws(IOException::class, InterruptedException::class)
+    fun forward(hostPort: Int, remoteDestination: String): PortForwarder {
+        val forwarder = TcpForwarder(this, hostPort, remoteDestination)
         forwarder.start()
 
         return forwarder
     }
 
+    @Throws(IOException::class)
+    fun reverseForward(
+        device: String,
+        host: String,
+        noRebind: Boolean = false,
+    ): String? {
+        requireSupportedReverseHostDestination(host)
+        val payload = executeAdbService(buildReverseForwardDestination(device, host, noRebind))
+        return payload.ifBlank { null }
+    }
+
+    @Throws(IOException::class)
+    fun reverseForward(
+        devicePort: Int,
+        hostPort: Int,
+        noRebind: Boolean = false,
+    ): String? {
+        return reverseForward(
+            device = "tcp:$devicePort",
+            host = "tcp:$hostPort",
+            noRebind = noRebind,
+        )
+    }
+
+    @Throws(IOException::class)
+    fun reverseKillForward(device: String) {
+        executeAdbService(buildReverseKillDestination(device))
+    }
+
+    @Throws(IOException::class)
+    fun reverseKillAllForwards() {
+        executeAdbService(buildReverseKillAllDestination())
+    }
+
+    @Throws(IOException::class)
+    fun reverseListForwards(): List<AdbReverseRule> {
+        return parseReverseListOutput(executeAdbService(buildReverseListDestination()))
+    }
+
+    @Throws(IOException::class)
+    fun reverseLocalAbstract(
+        deviceSocketName: String,
+        hostPort: Int,
+        noRebind: Boolean = false,
+    ): String? {
+        require(deviceSocketName.isNotBlank()) { "deviceSocketName must not be blank" }
+        return reverseForward(
+            device = "localabstract:$deviceSocketName",
+            host = "tcp:$hostPort",
+            noRebind = noRebind,
+        )
+    }
+
     companion object {
+        private const val SHELL_V2_FEATURE = "shell_v2"
+        private const val SHELL_SERVICE_BASE = "shell"
+        private const val SHELL_ARG_V2 = "v2"
+        private const val SHELL_TYPE_RAW = "raw"
+        private val SYNC_FEATURES = setOf(FEATURE_STAT_V2, FEATURE_LS_V2, FEATURE_SENDRECV_V2)
 
         private const val MIN_EMULATOR_PORT = 5555
         private const val MAX_EMULATOR_PORT = 5683
+        private const val DEFAULT_MODE = 0b110100100
+        private val isPosixFs: Boolean by lazy {
+            FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
+        }
 
         @JvmStatic
         @JvmOverloads
@@ -328,7 +479,11 @@ interface Dadb : AutoCloseable {
         }
 
         private fun readMode(file: File): Int {
-            return Files.getAttribute(file.toPath(), "unix:mode") as? Int ?: throw RuntimeException("Unable to read file mode")
+            if (!isPosixFs) {
+                return DEFAULT_MODE
+            }
+            val mode = Files.getAttribute(file.toPath(), "unix:mode") as? Int
+            return mode ?: DEFAULT_MODE
         }
     }
 }

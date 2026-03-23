@@ -14,6 +14,7 @@ import javax.net.ssl.X509ExtendedTrustManager
 data class AdbRuntimeOptions(
     val tlsTrustPolicy: AdbTlsTrustPolicy = AdbTlsTrustPolicy.TrustAll,
     val onServerTlsPeerObserved: ((AdbTlsPeerIdentity) -> Unit)? = null,
+    val identityLabel: String? = null,
 )
 
 @ExperimentalDadbAndroidApi
@@ -55,6 +56,15 @@ sealed interface AdbTlsTrustPolicy {
     class Custom(
         val createTrustManager: (target: AdbNetworkEndpoint) -> X509ExtendedTrustManager,
     ) : AdbTlsTrustPolicy
+
+    /**
+     * Require the TLS peer certificate public-key pin to match the expected value for the target.
+     */
+    class Pinned(
+        val expectedPinSha256Base64: (target: AdbNetworkEndpoint) -> String,
+    ) : AdbTlsTrustPolicy {
+        constructor(expectedPinSha256Base64: String) : this({ expectedPinSha256Base64 })
+    }
 }
 
 @OptIn(ExperimentalDadbAndroidApi::class)
@@ -64,6 +74,12 @@ internal fun AdbTlsTrustPolicy.resolveTrustManager(
     when (this) {
         AdbTlsTrustPolicy.TrustAll ->
             AdbTlsTrustManagers.createUnsafe()
+
+        is AdbTlsTrustPolicy.Pinned ->
+            AdbTlsTrustManagers.createPinned(
+                target = target,
+                expectedPinSha256Base64 = expectedPinSha256Base64(target),
+            )
 
         is AdbTlsTrustPolicy.Custom ->
             createTrustManager(target)

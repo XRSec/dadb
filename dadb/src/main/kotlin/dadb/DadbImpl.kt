@@ -20,6 +20,8 @@ package dadb
 import okio.sink
 import okio.source
 import org.jetbrains.annotations.TestOnly
+import java.io.EOFException
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.jvm.Throws
@@ -67,7 +69,7 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
 
     private var connection: Pair<AdbConnection, AdbTransport>? = null
 
-    override fun open(destination: String) = connection().open(destination)
+    override fun open(destination: String) = openWithRetry(destination)
 
     override fun supportsFeature(feature: String): Boolean {
         return connection().supportsFeature(feature)
@@ -79,12 +81,14 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
 
     override fun close() {
         connection?.first?.close()
+        connection = null
     }
     override fun toString() = description
 
     @TestOnly
     fun closeConnection() {
         connection?.second?.close()
+        connection = null
     }
 
     @Synchronized
@@ -101,6 +105,67 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
         val transport = transportFactory.connect()
         val adbConnection = AdbConnection.connect(transport, keyPair)
         return adbConnection to transport
+    }
+
+    private fun openWithRetry(
+        destination: String,
+        retryOnStaleConnection: Boolean = true,
+    ): AdbStream {
+        val connection = connectionPair()
+        return try {
+            connection.first.open(destination)
+        } catch (t: Throwable) {
+            if (!retryOnStaleConnection || !isRecoverableOpenFailure(t)) {
+                throw t
+            }
+            discardConnection(connection.first)
+            openWithRetry(destination, retryOnStaleConnection = false)
+        }
+    }
+
+    @Synchronized
+    private fun connectionPair(): Pair<AdbConnection, AdbTransport> {
+        var connection = connection
+        if (connection == null || connection.second.isClosed) {
+            connection = newConnection()
+            this.connection = connection
+        }
+        return connection
+    }
+
+    @Synchronized
+    private fun discardConnection(failedConnection: AdbConnection) {
+        val current = connection
+        if (current?.first === failedConnection) {
+            runCatching { current.first.close() }
+            connection = null
+        } else {
+            runCatching { failedConnection.close() }
+        }
+    }
+
+    private fun isRecoverableOpenFailure(error: Throwable): Boolean {
+        return when (error) {
+            is EOFException -> true
+            is IOException, is IllegalStateException -> {
+                val message = error.message.orEmpty().lowercase()
+                OPEN_FAILURE_MARKERS.any(message::contains) ||
+                    error.cause?.let(::isRecoverableOpenFailure) == true
+            }
+            else -> error.cause?.let(::isRecoverableOpenFailure) == true
+        }
+    }
+
+    private companion object {
+        private val OPEN_FAILURE_MARKERS =
+            listOf(
+                "closed",
+                "broken pipe",
+                "connection reset",
+                "connection abort",
+                "unexpected end",
+                "eof",
+            )
     }
 
     private class SocketAdbTransportFactory(

@@ -33,7 +33,9 @@ internal class AdbStreamImpl internal constructor(
         private val adbWriter: AdbWriter,
         private val maxPayloadSize: Int,
         private val localId: Int,
-        private val remoteId: Int
+        private val remoteId: Int,
+        private val delayedAckEnabled: Boolean = false,
+        private val initialAvailableSendBytes: Long = 0,
 ) : AdbStream {
 
     private var isClosed = false
@@ -47,17 +49,26 @@ internal class AdbStreamImpl internal constructor(
             val message = message() ?: return -1
 
             val bytesRemaining = message.payloadLength - bytesRead
-            val bytesToRead = Math.min(byteCount.toInt(), bytesRemaining)
+            val bytesToRead = byteCount
+                .coerceAtMost(Int.MAX_VALUE.toLong())
+                .toInt()
+                .coerceAtMost(bytesRemaining)
 
             sink.write(message.payload, bytesRead, bytesToRead)
 
             bytesRead += bytesToRead
 
+            if (delayedAckEnabled && bytesToRead > 0) {
+                adbWriter.writeOkay(localId, remoteId, bytesToRead)
+            }
+
             check(bytesRead <= message.payloadLength)
 
             if (bytesRead == message.payloadLength) {
                 this.message = null
-                adbWriter.writeOkay(localId, remoteId)
+                if (!delayedAckEnabled) {
+                    adbWriter.writeOkay(localId, remoteId)
+                }
             }
 
             return bytesToRead.toLong()
@@ -79,19 +90,21 @@ internal class AdbStreamImpl internal constructor(
     override val sink = object : Sink {
 
         private val buffer = ByteBuffer.allocate(maxPayloadSize)
+        private var availableSendBytes = initialAvailableSendBytes
 
         override fun write(source: Buffer, byteCount: Long) {
             var remainingBytes = byteCount
             while (true) {
-                remainingBytes -= writeToBuffer(source, byteCount)
+                remainingBytes -= writeToBuffer(source, remainingBytes)
                 if (remainingBytes == 0L) return
                 check(remainingBytes > 0L)
             }
         }
 
         private fun writeToBuffer(source: BufferedSource, byteCount: Long): Int {
-            val bytesToWrite = min(buffer.remaining(), byteCount.toInt())
+            val bytesToWrite = min(buffer.remaining(), byteCount.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             val bytesWritten = source.read(buffer.array(), buffer.position(), bytesToWrite)
+            if (bytesWritten < 0) throw java.io.EOFException("EOF while writing ADB stream")
 
             // Cast to prevent NoSuchMethodError when mixing Java versions
             // Learn more: https://www.morling.dev/blog/bytebuffer-and-the-dreaded-nosuchmethoderror
@@ -102,11 +115,32 @@ internal class AdbStreamImpl internal constructor(
         }
 
         override fun flush() {
-            adbWriter.writeWrite(localId, remoteId, buffer.array(), 0, buffer.position())
+            val payloadLength = buffer.position()
+            if (payloadLength == 0) return
+            if (delayedAckEnabled) {
+                var offset = 0
+                while (offset < payloadLength) {
+                    while (availableSendBytes <= 0) {
+                        availableSendBytes += awaitAckBytes().toLong()
+                    }
+                    val chunkLength = min(
+                        payloadLength - offset,
+                        availableSendBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    )
+                    adbWriter.writeWrite(localId, remoteId, buffer.array(), offset, chunkLength)
+                    availableSendBytes -= chunkLength.toLong()
+                    offset += chunkLength
+                }
+            } else {
+                adbWriter.writeWrite(localId, remoteId, buffer.array(), 0, payloadLength)
+            }
 
             // Cast to prevent NoSuchMethodError when mixing Java versions
             // Learn more: https://www.morling.dev/blog/bytebuffer-and-the-dreaded-nosuchmethoderror
             (buffer as java.nio.Buffer).clear()
+            if (!delayedAckEnabled && nextMessage(Constants.CMD_OKAY) == null) {
+                throw IOException("ADB stream closed before OKAY for localId: ${localId.toString(16)}")
+            }
         }
 
         override fun close() {}
@@ -114,21 +148,36 @@ internal class AdbStreamImpl internal constructor(
         override fun timeout() = Timeout.NONE
     }.buffer()
 
+    private fun awaitAckBytes(): Int {
+        val message = nextMessage(Constants.CMD_OKAY)
+            ?: throw IOException("ADB stream closed before delayed ACK for localId: ${localId.toString(16)}")
+        val ackBytes = Constants.decodeOkayAckBytes(message, delayedAckEnabled = true)
+        require(ackBytes >= 0) { "Delayed ACK bytes must be >= 0: $ackBytes" }
+        return ackBytes
+    }
+
     private fun nextMessage(command: Int): AdbMessage? {
         return try {
             messageQueue.take(localId, command)
         } catch (e: IOException) {
-            close()
+            close(sendClose = false)
             return null
         }
     }
 
     override fun close() {
+        close(sendClose = true)
+    }
+
+    private fun close(sendClose: Boolean) {
         if (isClosed) return
         isClosed = true
-
-        adbWriter.writeClose(localId, remoteId)
-
-        messageQueue.stopListening(localId)
+        try {
+            if (sendClose) {
+                adbWriter.writeClose(localId, remoteId)
+            }
+        } finally {
+            messageQueue.stopListening(localId)
+        }
     }
 }

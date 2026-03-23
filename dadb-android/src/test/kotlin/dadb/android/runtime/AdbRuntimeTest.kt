@@ -86,4 +86,24 @@ class AdbRuntimeTest {
             targetRoot.deleteRecursively()
         }
     }
+
+    @Test
+    fun loadOrCreateKeyPair_usesConfiguredIdentityLabel() {
+        val rootDir = Files.createTempDirectory("adb-runtime-test").toFile()
+        try {
+            val runtime =
+                AdbRuntime(
+                    rootDir,
+                    AdbRuntimeOptions(identityLabel = "Pixel8@ScreenRemote"),
+                )
+
+            runtime.loadOrCreateKeyPair()
+
+            val identity = runtime.readIdentity()
+
+            assertTrue(identity.publicKey.orEmpty().contains("Pixel8@ScreenRemote"))
+        } finally {
+            rootDir.deleteRecursively()
+        }
+    }
 }

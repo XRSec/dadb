@@ -32,7 +32,11 @@ class AdbRuntime(
         options: AdbRuntimeOptions = AdbRuntimeOptions(),
     ) : this(defaultStorageRoot(context), options)
 
-    private val identityStore = AdbIdentityStore(storageRoot)
+    private val identityStore =
+        AdbIdentityStore(storageRoot) {
+            options.identityLabel?.trim()?.takeIf { it.isNotEmpty() }
+                ?: AdbRuntimeIdentityLabel.defaultLabel()
+        }
 
     fun loadOrCreateKeyPair(): AdbKeyPair = identityStore.loadOrCreate()
 

@@ -2,6 +2,8 @@ package dadb.android.wireless
 
 import android.util.Log
 import dadb.android.tls.AdbTlsCertificatePins
+import dadb.android.tls.AdbTlsErrorMapper
+import dadb.android.tls.AdbTlsSockets
 import org.conscrypt.Conscrypt
 import java.io.Closeable
 import java.io.DataInputStream
@@ -192,7 +194,13 @@ internal class DirectAdbPairingClient(
 
         val tlsSocket =
             key.sslContext.socketFactory.createSocket(socket, host, port, true) as SSLSocket
-        tlsSocket.startHandshake()
+        try {
+            AdbTlsSockets.configureClientSocket(tlsSocket, socket.soTimeout)
+            tlsSocket.startHandshake()
+        } catch (t: Throwable) {
+            runCatching { tlsSocket.close() }
+            throw AdbTlsErrorMapper.map(t)
+        }
         pairingTlsPublicKeySha256Base64 = tlsSocket.peerLeafCertificate()?.let(AdbTlsCertificatePins::publicKeySha256Base64)
 
         inputStream = DataInputStream(tlsSocket.inputStream)

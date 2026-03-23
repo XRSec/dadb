@@ -5,14 +5,22 @@ import java.io.File
 
 class AdbIdentityStore(
     private val runtimeFiles: AdbRuntimeFiles,
+    private val identityLabel: () -> String = { "unknown@unknown" },
 ) {
-    constructor(rootDir: File) : this(AdbRuntimeFiles(rootDir))
+    constructor(
+        rootDir: File,
+        identityLabel: () -> String = { "unknown@unknown" },
+    ) : this(AdbRuntimeFiles(rootDir), identityLabel)
 
     fun loadOrCreate(): AdbKeyPair {
         runtimeFiles.ensureRootDirectory()
 
         if (!runtimeFiles.privateKeyFile.exists() || !runtimeFiles.publicKeyFile.exists()) {
-            AdbKeyPair.generate(runtimeFiles.privateKeyFile, runtimeFiles.publicKeyFile)
+            AdbKeyPair.generate(
+                runtimeFiles.privateKeyFile,
+                runtimeFiles.publicKeyFile,
+                publicKeyOwner = identityLabel(),
+            )
         }
 
         return AdbKeyPair.read(runtimeFiles.privateKeyFile, runtimeFiles.publicKeyFile)
@@ -27,7 +35,11 @@ class AdbIdentityStore(
             runtimeFiles.publicKeyFile.delete()
         }
 
-        AdbKeyPair.generate(runtimeFiles.privateKeyFile, runtimeFiles.publicKeyFile)
+        AdbKeyPair.generate(
+            runtimeFiles.privateKeyFile,
+            runtimeFiles.publicKeyFile,
+            publicKeyOwner = identityLabel(),
+        )
         return AdbKeyPair.read(runtimeFiles.privateKeyFile, runtimeFiles.publicKeyFile)
     }
 
