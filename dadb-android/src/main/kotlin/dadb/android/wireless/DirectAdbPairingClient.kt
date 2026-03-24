@@ -16,17 +16,17 @@ import javax.net.ssl.SSLSocket
 
 private const val TAG = "DirectAdbPairing"
 
-private const val CURRENT_KEY_HEADER_VERSION = 1.toByte()
-private const val MIN_SUPPORTED_KEY_HEADER_VERSION = 1.toByte()
-private const val MAX_SUPPORTED_KEY_HEADER_VERSION = 1.toByte()
-private const val MAX_PEER_INFO_SIZE = 8192
-private const val MAX_PAYLOAD_SIZE = MAX_PEER_INFO_SIZE * 2
+internal const val CURRENT_KEY_HEADER_VERSION = 1.toByte()
+internal const val MIN_SUPPORTED_KEY_HEADER_VERSION = 1.toByte()
+internal const val MAX_SUPPORTED_KEY_HEADER_VERSION = 1.toByte()
+internal const val MAX_PEER_INFO_SIZE = 8192
+internal const val MAX_PAYLOAD_SIZE = MAX_PEER_INFO_SIZE * 2
 
-private const val EXPORTED_KEY_LABEL = "adb-label\u0000"
-private const val EXPORTED_KEY_SIZE = 64
-private const val PAIRING_PACKET_HEADER_SIZE = 6
+internal const val EXPORTED_KEY_LABEL = "adb-label\u0000"
+internal const val EXPORTED_KEY_SIZE = 64
+internal const val PAIRING_PACKET_HEADER_SIZE = 6
 
-private class PeerInfo(
+internal class PairingPeerInfo(
     val type: Byte,
     rawData: ByteArray,
 ) {
@@ -44,16 +44,16 @@ private class PeerInfo(
     companion object {
         const val ADB_RSA_PUB_KEY: Byte = 0
 
-        fun readFrom(buffer: ByteBuffer): PeerInfo {
+        fun readFrom(buffer: ByteBuffer): PairingPeerInfo {
             val type = buffer.get()
             val data = ByteArray(MAX_PEER_INFO_SIZE - 1)
             buffer.get(data)
-            return PeerInfo(type, data)
+            return PairingPeerInfo(type, data)
         }
     }
 }
 
-private class PairingPacketHeader(
+internal class PairingPacketHeader(
     val version: Byte,
     val type: Byte,
     val payload: Int,
@@ -70,26 +70,84 @@ private class PairingPacketHeader(
     }
 
     companion object {
-        fun readFrom(buffer: ByteBuffer): PairingPacketHeader? {
+        fun readFrom(
+            buffer: ByteBuffer,
+            logError: (String) -> Unit = { Log.e(TAG, it) },
+        ): PairingPacketHeader? {
             val version = buffer.get()
             val type = buffer.get()
             val payload = buffer.int
 
             if (version !in MIN_SUPPORTED_KEY_HEADER_VERSION..MAX_SUPPORTED_KEY_HEADER_VERSION) {
-                Log.e(TAG, "header version mismatch: $version")
+                logError("header version mismatch: $version")
                 return null
             }
             if (type != Type.SPAKE2_MSG && type != Type.PEER_INFO) {
-                Log.e(TAG, "unknown packet type: $type")
+                logError("unknown packet type: $type")
                 return null
             }
             if (payload !in 1..MAX_PAYLOAD_SIZE) {
-                Log.e(TAG, "unsafe payload size: $payload")
+                logError("unsafe payload size: $payload")
                 return null
             }
             return PairingPacketHeader(version, type, payload)
         }
     }
+}
+
+internal enum class PairingClientState {
+    READY,
+    EXCHANGING_MSGS,
+    EXCHANGING_PEER_INFO,
+    STOPPED,
+}
+
+internal object PairingClientStateMachine {
+    fun start(state: PairingClientState): PairingClientState {
+        check(state == PairingClientState.READY) { "Pairing client can only start from READY, was $state" }
+        return PairingClientState.EXCHANGING_MSGS
+    }
+
+    fun afterMessageExchange(
+        state: PairingClientState,
+        success: Boolean,
+    ): PairingClientState {
+        check(state == PairingClientState.EXCHANGING_MSGS) {
+            "Message exchange can only complete from EXCHANGING_MSGS, was $state"
+        }
+        return if (success) PairingClientState.EXCHANGING_PEER_INFO else PairingClientState.STOPPED
+    }
+
+    fun afterPeerInfoExchange(
+        state: PairingClientState,
+        success: Boolean,
+    ): PairingClientState {
+        check(state == PairingClientState.EXCHANGING_PEER_INFO) {
+            "Peer info exchange can only complete from EXCHANGING_PEER_INFO, was $state"
+        }
+        return PairingClientState.STOPPED
+    }
+}
+
+internal fun decodePeerAdbPublicKey(
+    decrypted: ByteArray?,
+    onInvalidSize: (Int) -> Unit = {},
+): ByteArray? {
+    val payload = decrypted ?: throw AdbInvalidPairingCodeException()
+    if (payload.size != MAX_PEER_INFO_SIZE) {
+        onInvalidSize(payload.size)
+        return null
+    }
+    val remotePeerInfo = PairingPeerInfo.readFrom(ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN))
+    return remotePeerInfo.data.copyUntilZeroByte()
+}
+
+internal fun ByteArray.copyUntilZeroByte(): ByteArray {
+    var end = indexOf(0)
+    if (end < 0) {
+        end = size
+    }
+    return copyOf(end)
 }
 
 internal class PairingContext private constructor(
@@ -150,38 +208,30 @@ internal class DirectAdbPairingClient(
     private val pairingCode: String,
     private val key: AdbPairingKey,
 ) : Closeable {
-    private enum class State {
-        READY,
-        EXCHANGING_MSGS,
-        EXCHANGING_PEER_INFO,
-        STOPPED,
-    }
-
     private lateinit var socket: Socket
     private lateinit var inputStream: DataInputStream
     private lateinit var outputStream: DataOutputStream
 
-    private val peerInfo = PeerInfo(PeerInfo.ADB_RSA_PUB_KEY, key.adbPublicKey)
+    private val peerInfo = PairingPeerInfo(PairingPeerInfo.ADB_RSA_PUB_KEY, key.adbPublicKey)
     private lateinit var pairingContext: PairingContext
-    private var state: State = State.READY
+    private var state: PairingClientState = PairingClientState.READY
     private var pairingTlsPublicKeySha256Base64: String? = null
 
     fun start(): PairingSessionMetadata? {
         setupTlsConnection()
-        state = State.EXCHANGING_MSGS
-        if (!doExchangeMsgs()) {
-            state = State.STOPPED
+        state = PairingClientStateMachine.start(state)
+        val exchangedMsgs = doExchangeMsgs()
+        state = PairingClientStateMachine.afterMessageExchange(state, exchangedMsgs)
+        if (!exchangedMsgs) {
             return null
         }
 
-        state = State.EXCHANGING_PEER_INFO
         val peerMetadata = doExchangePeerInfo()
+        state = PairingClientStateMachine.afterPeerInfoExchange(state, peerMetadata != null)
         if (peerMetadata == null) {
-            state = State.STOPPED
             return null
         }
 
-        state = State.STOPPED
         return PairingSessionMetadata(
             peerAdbPublicKey = peerMetadata.adbPublicKey,
             pairingTlsPublicKeySha256Base64 = pairingTlsPublicKeySha256Base64,
@@ -280,15 +330,13 @@ internal class DirectAdbPairingClient(
         val peerMessage = ByteArray(theirHeader.payload)
         inputStream.readFully(peerMessage)
 
-        val decrypted =
-            pairingContext.decrypt(peerMessage) ?: throw AdbInvalidPairingCodeException()
-        if (decrypted.size != MAX_PEER_INFO_SIZE) {
-            Log.e(TAG, "invalid peer info size: ${decrypted.size}")
-            return null
-        }
-        val remotePeerInfo = PeerInfo.readFrom(ByteBuffer.wrap(decrypted).order(ByteOrder.BIG_ENDIAN))
+        val adbPublicKey =
+            decodePeerAdbPublicKey(
+                decrypted = pairingContext.decrypt(peerMessage),
+                onInvalidSize = { size -> Log.e(TAG, "invalid peer info size: $size") },
+            ) ?: return null
         return PairingPeerMetadata(
-            adbPublicKey = remotePeerInfo.data.copyUntilZeroByte(),
+            adbPublicKey = adbPublicKey,
         )
     }
 
@@ -296,22 +344,14 @@ internal class DirectAdbPairingClient(
         runCatching { inputStream.close() }
         runCatching { outputStream.close() }
         runCatching { socket.close() }
-        if (state != State.READY) {
+        if (state != PairingClientState.READY) {
             runCatching { pairingContext.destroy() }
         }
     }
-
-    private fun SSLSocket.peerLeafCertificate(): X509Certificate? =
-        session.peerCertificates.firstOrNull() as? X509Certificate
-
-    private fun ByteArray.copyUntilZeroByte(): ByteArray {
-        var end = indexOf(0)
-        if (end < 0) {
-            end = size
-        }
-        return copyOf(end)
-    }
 }
+
+private fun SSLSocket.peerLeafCertificate(): X509Certificate? =
+    session.peerCertificates.firstOrNull() as? X509Certificate
 
 internal data class PairingSessionMetadata(
     val peerAdbPublicKey: ByteArray,
