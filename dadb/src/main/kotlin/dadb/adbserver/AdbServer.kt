@@ -1,19 +1,19 @@
 package dadb.adbserver
 
-import dadb.AdbConnection
 import dadb.AdbStream
 import dadb.Dadb
 import okio.buffer
 import okio.sink
 import okio.source
-import java.io.*
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.IOException
+import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 
-
 object AdbServer {
-
     /**
      * Experimental API
      *
@@ -48,11 +48,12 @@ object AdbServer {
         adbServerPort: Int = 5037,
         deviceQuery: String = "host:transport-any",
         connectTimeout: Int = 0,
-        socketTimeout: Int = 0
+        socketTimeout: Int = 0,
     ): Dadb {
-        val name = deviceQuery
-            .removePrefix("host:") // Use the device query without the host: prefix
-            .removePrefix("transport:") // If it's a serial-number, just show that
+        val name =
+            deviceQuery
+                .removePrefix("host:") // Use the device query without the host: prefix
+                .removePrefix("transport:") // If it's a serial-number, just show that
         return AdbServerDadb(adbServerHost, adbServerPort, deviceQuery, name, connectTimeout, socketTimeout)
     }
 
@@ -68,11 +69,13 @@ object AdbServer {
         if (!AdbBinary.tryStartServer(adbServerHost, adbServerPort)) {
             return emptyList()
         }
-        val output = Socket(adbServerHost, adbServerPort).use { socket ->
-            send(socket, "host:devices")
-            readString(DataInputStream(socket.getInputStream()))
-        }
-        return output.lines()
+        val output =
+            Socket(adbServerHost, adbServerPort).use { socket ->
+                send(socket, "host:devices")
+                readString(DataInputStream(socket.getInputStream()))
+            }
+        return output
+            .lines()
             .filter { it.isNotBlank() }
             .mapNotNull {
                 val parts = it.split("\t")
@@ -81,8 +84,7 @@ object AdbServer {
                 } else {
                     parts[0]
                 }
-            }
-            .map { createDadb(adbServerHost, adbServerPort, "host:transport:${it}") }
+            }.map { createDadb(adbServerHost, adbServerPort, "host:transport:$it") }
     }
 
     internal fun readString(inputStream: DataInputStream): String {
@@ -91,7 +93,10 @@ object AdbServer {
         return readString(inputStream, length)
     }
 
-    internal fun send(socket: Socket, command: String) {
+    internal fun send(
+        socket: Socket,
+        command: String,
+    ) {
         val inputStream = DataInputStream(socket.getInputStream())
         val outputStream = DataOutputStream(socket.getOutputStream())
 
@@ -104,7 +109,10 @@ object AdbServer {
         }
     }
 
-    private fun writeString(outputStream: DataOutputStream, string: String) {
+    private fun writeString(
+        outputStream: DataOutputStream,
+        string: String,
+    ) {
         OutputStreamWriter(outputStream, StandardCharsets.UTF_8).apply {
             write(String.format("%04x", string.toByteArray().size))
             write(string)
@@ -112,7 +120,10 @@ object AdbServer {
         }
     }
 
-    private fun readString(inputStream: DataInputStream, length: Int): String {
+    private fun readString(
+        inputStream: DataInputStream,
+        length: Int,
+    ): String {
         val responseBuffer = ByteArray(length)
         inputStream.readFully(responseBuffer)
         return String(responseBuffer, StandardCharsets.UTF_8)
@@ -127,17 +138,20 @@ private class AdbServerDadb constructor(
     private val connectTimeout: Int = 0,
     private val socketTimeout: Int = 0,
 ) : Dadb {
-
     private val supportedFeatures: Set<String>
 
     init {
-        supportedFeatures = open("host:features").use {
-            val features = AdbServer.readString(DataInputStream(it.source.inputStream()))
-            features.split(",").toSet()
-        }
+        supportedFeatures =
+            open("host:features").use {
+                val features = AdbServer.readString(DataInputStream(it.source.inputStream()))
+                features.split(",").toSet()
+            }
     }
 
-    override fun open(destination: String): AdbStream {
+    override fun open(
+        destination: String,
+        enableDelayedAck: Boolean,
+    ): AdbStream {
         AdbBinary.ensureServerRunning(host, port)
 
         val socketAddress = InetSocketAddress(host, port)
@@ -148,7 +162,6 @@ private class AdbServerDadb constructor(
         AdbServer.send(socket, deviceQuery)
         AdbServer.send(socket, destination)
         return object : AdbStream {
-
             override val source = socket.source().buffer()
 
             override val sink = socket.sink().buffer()
@@ -157,17 +170,11 @@ private class AdbServerDadb constructor(
         }
     }
 
-    override fun supportsFeature(feature: String): Boolean {
-        return feature in supportedFeatures
-    }
+    override fun supportsFeature(feature: String): Boolean = feature in supportedFeatures
 
-    override fun isTlsConnection(): Boolean {
-        return false
-    }
+    override fun isTlsConnection(): Boolean = false
 
     override fun close() {}
 
-    override fun toString(): String {
-        return name
-    }
+    override fun toString(): String = name
 }

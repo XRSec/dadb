@@ -31,7 +31,11 @@ interface Dadb : AutoCloseable {
 
     fun supportsFeature(feature: String): Boolean
 
+    fun supportsDelayedAck(): Boolean = supportsFeature(Constants.FEATURE_DELAYED_ACK)
+
     fun isTlsConnection(): Boolean
+
+    fun reconnect(withDelayedAck: Boolean)
 
     @Throws(IOException::class)
     fun shell(command: String): AdbShellResponse {

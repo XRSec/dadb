@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 rootProject.name = "dadb"
 include("dadb")
 include("dadb-android")
+include("dadb-helper")

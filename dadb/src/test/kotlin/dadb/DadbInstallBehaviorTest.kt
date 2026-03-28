@@ -41,7 +41,7 @@ internal class DadbInstallBehaviorTest {
         val openedDestinations = mutableListOf<String>()
         private val writeSinks = mutableListOf<Buffer>()
 
-        override fun open(destination: String): AdbStream {
+        override fun open(destination: String, enableDelayedAck: Boolean): AdbStream {
             openedDestinations += destination
             val sink = Buffer()
             if (destination.startsWith("abb_exec:package\u0000install-write")) {

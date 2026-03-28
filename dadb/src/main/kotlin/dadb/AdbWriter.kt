@@ -28,13 +28,13 @@ internal class AdbWriter(sink: Sink) : AutoCloseable {
     @Volatile
     private var protocolVersion: Int = Constants.A_VERSION_MIN
 
-    fun writeConnect(maxData: Int = Constants.CONNECT_MAXDATA) = write(
+    fun writeConnect(maxData: Int = Constants.CONNECT_MAXDATA, connectPayload: ByteArray = Constants.CONNECT_PAYLOAD) = write(
             Constants.CMD_CNXN,
             Constants.CONNECT_VERSION,
             maxData,
-            Constants.CONNECT_PAYLOAD,
+            connectPayload,
             0,
-            Constants.CONNECT_PAYLOAD.size
+            connectPayload.size
     )
 
     fun writeAuth(authType: Int, authPayload: ByteArray) = write(

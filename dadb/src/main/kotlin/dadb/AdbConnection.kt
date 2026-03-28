@@ -227,7 +227,7 @@ internal class AdbConnection internal constructor(
             return connect(source, sink, keyPair, socket)
         }
 
-        fun connect(transport: AdbTransport, keyPair: AdbKeyPair? = null): AdbConnection {
+        fun connect(transport: AdbTransport, keyPair: AdbKeyPair? = null, features: Set<String> = Constants.CONNECT_FEATURES.toSet()): AdbConnection {
             return connect(
                 transport.source,
                 transport.sink,
@@ -235,6 +235,7 @@ internal class AdbConnection internal constructor(
                 closeable = transport,
                 connectMaxData = transport.connectMaxData,
                 tlsUpgradableTransport = transport as? TlsUpgradableAdbTransport,
+                features = features,
             )
         }
 
@@ -245,12 +246,13 @@ internal class AdbConnection internal constructor(
             closeable: AutoCloseable? = null,
             connectMaxData: Int = Constants.CONNECT_MAXDATA,
             tlsUpgradableTransport: TlsUpgradableAdbTransport? = null,
+            features: Set<String> = Constants.CONNECT_FEATURES.toSet(),
         ): AdbConnection {
             val adbReader = AdbReader(source, maxPayloadSize = Constants.MAX_PAYLOAD_V1)
             val adbWriter = AdbWriter(sink)
 
             try {
-                return connect(adbReader, adbWriter, keyPair, closeable, connectMaxData, tlsUpgradableTransport)
+                return connect(adbReader, adbWriter, keyPair, closeable, connectMaxData, tlsUpgradableTransport, features)
             } catch (t: Throwable) {
                 adbReader.close()
                 adbWriter.close()
@@ -265,11 +267,13 @@ internal class AdbConnection internal constructor(
             closeable: AutoCloseable?,
             connectMaxData: Int,
             tlsUpgradableTransport: TlsUpgradableAdbTransport?,
+            features: Set<String> = Constants.CONNECT_FEATURES.toSet(),
         ): AdbConnection {
             var currentReader = adbReader
             var currentWriter = adbWriter
             var tlsUpgraded = false
-            currentWriter.writeConnect(connectMaxData)
+            val connectPayload = "host::features=${features.joinToString(",")}".toByteArray()
+            currentWriter.writeConnect(connectMaxData, connectPayload)
 
             var message = currentReader.readMessage()
 
