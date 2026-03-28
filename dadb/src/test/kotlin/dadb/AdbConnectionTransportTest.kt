@@ -321,13 +321,15 @@ internal class AdbConnectionTransportTest {
     fun reverseForward_rejectsUnsupportedHostDestination() {
         val dadb =
             object : Dadb {
-                override fun open(destination: String, enableDelayedAck: Boolean): AdbStream {
+                override fun open(destination: String): AdbStream {
                     error("open should not be called for invalid reverse destinations")
                 }
 
                 override fun supportsFeature(feature: String): Boolean = false
 
                 override fun isTlsConnection(): Boolean = false
+
+                override fun reconnect(withDelayedAck: Boolean) = Unit
 
                 override fun close() = Unit
             }
@@ -501,7 +503,7 @@ private class RecordingDadb(
     val openDestinations = mutableListOf<String>()
     private val pendingResponses = ArrayDeque(serviceResponses.toList())
 
-    override fun open(destination: String, enableDelayedAck: Boolean): AdbStream {
+    override fun open(destination: String): AdbStream {
         openDestinations += destination
         val response = if (pendingResponses.isEmpty()) error("No queued response for destination: $destination") else pendingResponses.removeFirst()
         return FakeAdbStream(response)
@@ -510,6 +512,8 @@ private class RecordingDadb(
     override fun supportsFeature(feature: String): Boolean = false
 
     override fun isTlsConnection(): Boolean = false
+
+    override fun reconnect(withDelayedAck: Boolean) = Unit
 
     override fun close() = Unit
 }

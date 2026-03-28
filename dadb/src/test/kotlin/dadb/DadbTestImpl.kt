@@ -21,11 +21,13 @@ internal class DadbTestImpl : DadbTest() {
         private val connection: AdbConnection,
     ) : Dadb {
 
-        override fun open(destination: String, enableDelayedAck: Boolean) = connection.open(destination, enableDelayedAck)
+        override fun open(destination: String) = connection.open(destination)
 
         override fun supportsFeature(feature: String) = connection.supportsFeature(feature)
 
         override fun isTlsConnection() = connection.isTlsConnection()
+
+        override fun reconnect(withDelayedAck: Boolean) = Unit
 
         override fun close() = connection.close()
     }

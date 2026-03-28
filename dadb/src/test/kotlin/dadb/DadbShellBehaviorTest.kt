@@ -51,7 +51,7 @@ internal class DadbShellBehaviorTest {
     ) : Dadb {
         val openedDestinations = mutableListOf<String>()
 
-        override fun open(destination: String, enableDelayedAck: Boolean): AdbStream {
+        override fun open(destination: String): AdbStream {
             openedDestinations += destination
             val source =
                 Buffer().apply {
