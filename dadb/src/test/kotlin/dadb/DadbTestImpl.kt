@@ -27,8 +27,6 @@ internal class DadbTestImpl : DadbTest() {
 
         override fun isTlsConnection() = connection.isTlsConnection()
 
-        override fun reconnect(withDelayedAck: Boolean) = Unit
-
         override fun close() = connection.close()
     }
 

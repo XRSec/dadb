@@ -158,13 +158,18 @@ internal abstract class BaseForwarder(
 
     private fun createClientExecutor(): ExecutorService {
         return ThreadPoolExecutor(
-            1,
+            MAX_CLIENT_THREADS,
             MAX_CLIENT_THREADS,
             60,
             TimeUnit.SECONDS,
             LinkedBlockingQueue(MAX_CLIENT_QUEUE_SIZE),
             ThreadPoolExecutor.CallerRunsPolicy(),
-        )
+        ).apply {
+            // Multi-socket protocols like scrcpy expect all channels to be connected promptly.
+            // If accepted clients are queued behind a single active worker, the device only sees
+            // the first socket and waits forever for the remaining ones.
+            allowCoreThreadTimeOut(true)
+        }
     }
 
     private fun throwStartFailure(failure: Throwable): Nothing {

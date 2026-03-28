@@ -77,6 +77,7 @@ class AdbRuntime(
         port: Int,
         connectTimeout: Int = 0,
         socketTimeout: Int = 0,
+        features: Set<String> = Dadb.connectFeatures(),
     ): Dadb {
         val keyPair = loadOrCreateKeyPair()
         val target = AdbNetworkEndpoint(host = host, port = port)
@@ -102,6 +103,7 @@ class AdbRuntime(
                     },
                 ),
                 keyPair,
+                features,
             )
 
         try {

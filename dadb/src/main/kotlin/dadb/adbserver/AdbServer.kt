@@ -1,7 +1,6 @@
 package dadb.adbserver
 
 import dadb.AdbStream
-import dadb.Constants
 import dadb.Dadb
 import okio.buffer
 import okio.sink
@@ -140,7 +139,6 @@ private class AdbServerDadb constructor(
     private val socketTimeout: Int = 0,
 ) : Dadb {
     private val supportedFeatures: Set<String>
-    private var delayedAckEnabled: Boolean = false
 
     init {
         supportedFeatures =
@@ -171,13 +169,7 @@ private class AdbServerDadb constructor(
 
     override fun supportsFeature(feature: String): Boolean = feature in supportedFeatures
 
-    override fun supportsDelayedAck(): Boolean = delayedAckEnabled && supportsFeature(Constants.FEATURE_DELAYED_ACK)
-
     override fun isTlsConnection(): Boolean = false
-
-    override fun reconnect(withDelayedAck: Boolean) {
-        delayedAckEnabled = withDelayedAck
-    }
 
     override fun close() {}
 

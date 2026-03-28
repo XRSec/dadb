@@ -35,6 +35,7 @@ internal class AdbConnection internal constructor(
         private val adbWriter: AdbWriter,
         private val closeable: AutoCloseable?,
         private val supportedFeatures: Set<String>,
+        private val delayedAckEnabled: Boolean,
         private val version: Int,
         private val maxPayloadSize: Int,
         private val tlsUpgraded: Boolean,
@@ -43,7 +44,6 @@ internal class AdbConnection internal constructor(
     private val random = Random()
     private val messageQueue = AdbMessageQueue(adbReader)
     private val reverseSessionThreads = ConcurrentLinkedQueue<Thread>()
-    private val delayedAckEnabled = supportedFeatures.contains(Constants.FEATURE_DELAYED_ACK)
 
     @Volatile
     private var reverseThread: Thread? = null
@@ -307,6 +307,9 @@ internal class AdbConnection internal constructor(
 
             val connectionString = parseConnectionString(String(message.payload))
             val peerFeatures = connectionString.features
+            val delayedAckEnabled =
+                Constants.FEATURE_DELAYED_ACK in features &&
+                    Constants.FEATURE_DELAYED_ACK in peerFeatures
             val version = minOf(message.arg0, Constants.CONNECT_VERSION)
             val peerMaxPayloadSize = message.arg1
             if (peerMaxPayloadSize <= 0) {
@@ -318,7 +321,16 @@ internal class AdbConnection internal constructor(
             currentReader.setMaxPayloadSize(maxPayloadSize)
             currentWriter.updateProtocolVersion(version)
 
-            return AdbConnection(currentReader, currentWriter, closeable, peerFeatures, version, maxPayloadSize, tlsUpgraded)
+            return AdbConnection(
+                currentReader,
+                currentWriter,
+                closeable,
+                peerFeatures,
+                delayedAckEnabled,
+                version,
+                maxPayloadSize,
+                tlsUpgraded,
+            )
         }
 
         // ie: "device::ro.product.name=sdk_gphone_x86;ro.product.model=Android SDK built for x86;ro.product.device=generic_x86;features=fixed_push_symlink_timestamp,apex,fixed_push_mkdir,stat_v2,abb_exec,cmd,abb,shell_v2"

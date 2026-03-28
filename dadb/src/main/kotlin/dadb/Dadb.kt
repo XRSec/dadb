@@ -31,11 +31,7 @@ interface Dadb : AutoCloseable {
 
     fun supportsFeature(feature: String): Boolean
 
-    fun supportsDelayedAck(): Boolean = supportsFeature(Constants.FEATURE_DELAYED_ACK)
-
     fun isTlsConnection(): Boolean
-
-    fun reconnect(withDelayedAck: Boolean)
 
     @Throws(IOException::class)
     fun shell(command: String): AdbShellResponse {
@@ -400,13 +396,24 @@ interface Dadb : AutoCloseable {
         private const val SHELL_ARG_V2 = "v2"
         private const val SHELL_TYPE_RAW = "raw"
         private val SYNC_FEATURES = setOf(FEATURE_STAT_V2, FEATURE_LS_V2, FEATURE_SENDRECV_V2)
+        private val DEFAULT_CONNECT_FEATURES = Constants.CONNECT_FEATURES.toSet()
 
         private const val MIN_EMULATOR_PORT = 5555
         private const val MAX_EMULATOR_PORT = 5683
         private const val DEFAULT_MODE = 0b110100100
+        const val FEATURE_DELAYED_ACK = "delayed_ack"
         private val isPosixFs: Boolean by lazy {
             FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
         }
+
+        @JvmStatic
+        @JvmOverloads
+        fun connectFeatures(withDelayedAck: Boolean = true): Set<String> =
+            if (withDelayedAck) {
+                DEFAULT_CONNECT_FEATURES
+            } else {
+                DEFAULT_CONNECT_FEATURES - FEATURE_DELAYED_ACK
+            }
 
         @JvmStatic
         @JvmOverloads
@@ -414,7 +421,7 @@ interface Dadb : AutoCloseable {
 
         @JvmStatic
         @JvmOverloads
-        fun create(transportFactory: AdbTransportFactory, keyPair: AdbKeyPair? = AdbKeyPair.readDefault()): Dadb = DadbImpl(transportFactory = transportFactory, keyPair = keyPair)
+        fun create(transportFactory: AdbTransportFactory, keyPair: AdbKeyPair? = AdbKeyPair.readDefault(), features: Set<String> = connectFeatures()): Dadb = DadbImpl(transportFactory = transportFactory, keyPair = keyPair, features = features)
 
         @JvmStatic
         @JvmOverloads

@@ -98,6 +98,46 @@ internal class AdbConnectionTransportTest {
     }
 
     @Test
+    fun open_withoutRequestedDelayedAckDoesNotNegotiateInitialWindows() {
+        val deviceResponse = Buffer()
+        val responsePayload = "device::features=shell_v2,delayed_ack".toByteArray()
+        val deviceWriter = AdbWriter(deviceResponse)
+        deviceWriter.write(
+            Constants.CMD_CNXN,
+            Constants.CONNECT_VERSION,
+            4096,
+            responsePayload,
+            0,
+            responsePayload.size,
+        )
+        val hostWrites = Buffer()
+        var capturedOpenMessage: AdbMessage? = null
+        val transport = SourceSinkAdbTransport(
+            source = deviceResponse,
+            sink = ReplyingSink(hostWrites) { message ->
+                if (message.command == Constants.CMD_OPEN) {
+                    capturedOpenMessage = message
+                    AdbWriter(deviceResponse).writeOkay(2, message.arg0)
+                }
+            },
+            description = "usb:test",
+        )
+
+        AdbConnection.connect(
+            transport,
+            features = Dadb.connectFeatures(withDelayedAck = false),
+        ).use { connection ->
+            assertThat(connection.supportsFeature(Dadb.FEATURE_DELAYED_ACK)).isTrue()
+            connection.open("shell:echo no_delayed_ack").close()
+        }
+
+        val openMessage = checkNotNull(capturedOpenMessage)
+        assertThat(openMessage.command).isEqualTo(Constants.CMD_OPEN)
+        assertThat(openMessage.arg1).isEqualTo(0)
+        assertThat(String(openMessage.payload, 0, openMessage.payloadLength - 1)).isEqualTo("shell:echo no_delayed_ack")
+    }
+
+    @Test
     fun connect_stlsUpgrade() {
         val rawDeviceResponse = Buffer()
         AdbWriter(rawDeviceResponse).write(
@@ -329,8 +369,6 @@ internal class AdbConnectionTransportTest {
 
                 override fun isTlsConnection(): Boolean = false
 
-                override fun reconnect(withDelayedAck: Boolean) = Unit
-
                 override fun close() = Unit
             }
 
@@ -512,8 +550,6 @@ private class RecordingDadb(
     override fun supportsFeature(feature: String): Boolean = false
 
     override fun isTlsConnection(): Boolean = false
-
-    override fun reconnect(withDelayedAck: Boolean) = Unit
 
     override fun close() = Unit
 }

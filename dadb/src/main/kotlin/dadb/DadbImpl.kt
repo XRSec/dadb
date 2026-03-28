@@ -31,15 +31,18 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
         private val description: String,
         private val transportFactory: AdbTransportFactory,
         private val keyPair: AdbKeyPair? = null,
+        private val features: Set<String> = Constants.CONNECT_FEATURES.toSet(),
 ) : Dadb {
 
     internal constructor(
         transportFactory: AdbTransportFactory,
         keyPair: AdbKeyPair? = null,
+        features: Set<String> = Constants.CONNECT_FEATURES.toSet(),
     ) : this(
         description = transportFactory.description,
         transportFactory = transportFactory,
         keyPair = keyPair,
+        features = features,
     )
 
     internal constructor(
@@ -68,7 +71,6 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
     }
 
     private var connection: Pair<AdbConnection, AdbTransport>? = null
-    private var preferredFeatures: Set<String> = Constants.CONNECT_FEATURES.toSet()
 
     override fun open(destination: String) = openWithRetry(destination)
 
@@ -104,25 +106,8 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
 
     private fun newConnection(): Pair<AdbConnection, AdbTransport> {
         val transport = transportFactory.connect()
-        val adbConnection = AdbConnection.connect(transport, keyPair, preferredFeatures)
+        val adbConnection = AdbConnection.connect(transport, keyPair, features)
         return adbConnection to transport
-    }
-
-    @Synchronized
-    override fun reconnect(withDelayedAck: Boolean) {
-        val current = connection
-        if (current != null && !current.second.isClosed) {
-            val hasDelayedAck = current.first.supportsFeature(Constants.FEATURE_DELAYED_ACK)
-            if (hasDelayedAck == withDelayedAck) return
-        }
-        connection?.first?.close()
-        connection = null
-        preferredFeatures = if (withDelayedAck) {
-            Constants.CONNECT_FEATURES.toSet()
-        } else {
-            Constants.CONNECT_FEATURES.toSet() - Constants.FEATURE_DELAYED_ACK
-        }
-        connection = newConnection()
     }
 
     private fun openWithRetry(
