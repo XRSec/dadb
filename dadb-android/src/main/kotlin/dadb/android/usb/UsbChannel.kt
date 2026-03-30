@@ -23,6 +23,7 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.util.Log
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
@@ -35,6 +36,9 @@ internal class UsbChannel(
     private val readTimeoutMs: Int,
     private val readIdleTimeoutMs: Int,
 ) : AutoCloseable {
+    private companion object {
+        private const val TAG = "DadbUsbChannel"
+    }
 
     private val connection: UsbDeviceConnection =
         usbManager.openDevice(usbDevice)
@@ -66,6 +70,11 @@ internal class UsbChannel(
         val endpoints = findBulkEndpoints()
         endpointIn = endpoints.first ?: throw IOException("Bulk IN endpoint not found")
         endpointOut = endpoints.second ?: throw IOException("Bulk OUT endpoint not found")
+        Log.d(
+            TAG,
+            "UsbChannel init device=${usbDevice.deviceName} in=${endpointIn.address}/${endpointIn.maxPacketSize} " +
+                "out=${endpointOut.address}/${endpointOut.maxPacketSize}",
+        )
 
         readerThread.start()
     }
@@ -133,14 +142,13 @@ internal class UsbChannel(
             return
         }
         closed = true
+        Log.d(TAG, "UsbChannel close start device=${usbDevice.deviceName}")
         incomingChunks.offer(ByteArray(0))
 
         try {
             readerThread.interrupt()
         } catch (_: Exception) {
         }
-
-        resetTransport()
 
         try {
             connection.releaseInterface(usbInterface)
@@ -151,6 +159,7 @@ internal class UsbChannel(
             connection.close()
         } catch (_: Exception) {
         }
+        Log.d(TAG, "UsbChannel close complete device=${usbDevice.deviceName}")
     }
 
     private fun findAdbInterface(): UsbInterface? {
@@ -208,6 +217,7 @@ internal class UsbChannel(
         } catch (t: Throwable) {
             if (!closed) {
                 readError = t
+                Log.w(TAG, "UsbChannel reader stopped device=${usbDevice.deviceName}: ${t.javaClass.simpleName}: ${t.message}", t)
             }
         } finally {
             incomingChunks.offer(ByteArray(0))
@@ -238,12 +248,5 @@ internal class UsbChannel(
         }
 
         return buffer
-    }
-
-    private fun resetTransport() {
-        try {
-            connection.bulkTransfer(endpointOut, ByteArray(100), 100, 100)
-        } catch (_: Exception) {
-        }
     }
 }
