@@ -120,16 +120,54 @@ class AdbRuntime(
         usbManager: UsbManager,
         usbDevice: UsbDevice,
         description: String = usbDevice.deviceName,
+        features: Set<String> = Dadb.connectFeatures(),
     ): Dadb {
         val keyPair = loadOrCreateKeyPair()
-        return Dadb.create(
-            UsbTransportFactory(
-                usbManager = usbManager,
-                usbDevice = usbDevice,
-                description = description,
-            ),
-            keyPair,
+        return createAndWarmUsbDadb(
+            usbManager = usbManager,
+            usbDevice = usbDevice,
+            description = description,
+            keyPair = keyPair,
+            features = features,
         )
+    }
+
+    private fun createAndWarmUsbDadb(
+        usbManager: UsbManager,
+        usbDevice: UsbDevice,
+        description: String,
+        keyPair: AdbKeyPair,
+        features: Set<String>,
+    ): Dadb {
+        var lastError: Throwable? = null
+
+        repeat(2) { attempt ->
+            val dadb =
+                Dadb.create(
+                    UsbTransportFactory(
+                        usbManager = usbManager,
+                        usbDevice = usbDevice,
+                        description = description,
+                    ),
+                    keyPair,
+                    features,
+                )
+
+            try {
+                // Warm the USB transport before returning so the caller does not pay the cost
+                // of discovering a stale first handshake/open on its first shell request.
+                dadb.supportsFeature("shell_v2")
+                return dadb
+            } catch (t: Throwable) {
+                lastError = t
+                runCatching { dadb.close() }
+                if (attempt == 0) {
+                    Thread.sleep(150)
+                }
+            }
+        }
+
+        throw lastError ?: IllegalStateException("Failed to create USB Dadb: $description")
     }
 
     companion object {
