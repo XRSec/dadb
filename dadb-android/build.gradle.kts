@@ -10,6 +10,7 @@ android {
     defaultConfig {
         minSdk = 23
 
+        @Suppress("UnstableApiUsage")
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
@@ -33,7 +34,10 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+            path =
+                project.layout.projectDirectory
+                    .file("src/main/cpp/CMakeLists.txt")
+                    .asFile
             version = "3.22.1"
         }
     }
