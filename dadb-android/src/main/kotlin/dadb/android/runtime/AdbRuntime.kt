@@ -6,6 +6,7 @@ import android.hardware.usb.UsbManager
 import android.util.Log
 import dadb.AdbKeyPair
 import dadb.Dadb
+import dadb.DadbSession
 import dadb.android.storage.AdbIdentityStore
 import dadb.android.tls.AdbTlsCertificatePins
 import dadb.android.tls.TlsAdbTransportFactory
@@ -149,6 +150,41 @@ class AdbRuntime(
         return dadb
     }
 
+    /**
+     * Creates one logical network ADB session backed by a compatibility-first primary connection
+     * and a delayed-ACK streaming connection. The streaming connection is owned, shared, retried,
+     * and closed by the returned [DadbSession].
+     */
+    fun connectNetworkDadbSession(
+        host: String,
+        port: Int,
+        connectTimeout: Int = 0,
+        socketTimeout: Int = 0,
+        warmStreaming: Boolean = true,
+    ): DadbSession {
+        val primary =
+            connectNetworkDadb(
+                host = host,
+                port = port,
+                connectTimeout = connectTimeout,
+                socketTimeout = socketTimeout,
+                features = Dadb.connectFeatures(withDelayedAck = false),
+            )
+        return DadbSession(
+            primary = primary,
+            streamingFactory = {
+                connectNetworkDadb(
+                    host = host,
+                    port = port,
+                    connectTimeout = connectTimeout,
+                    socketTimeout = socketTimeout,
+                    features = Dadb.connectFeatures(withDelayedAck = true),
+                )
+            },
+            warmStreaming = warmStreaming,
+        )
+    }
+
     fun createUsbDadb(
         usbManager: UsbManager,
         usbDevice: UsbDevice,
@@ -164,6 +200,23 @@ class AdbRuntime(
             features = features,
         )
     }
+
+    /** Creates a single-transport session; both routes reuse the exclusively claimed USB link. */
+    fun createUsbDadbSession(
+        usbManager: UsbManager,
+        usbDevice: UsbDevice,
+        description: String = usbDevice.deviceName,
+        features: Set<String> = Dadb.connectFeatures(),
+    ): DadbSession =
+        DadbSession(
+            primary =
+                createUsbDadb(
+                    usbManager = usbManager,
+                    usbDevice = usbDevice,
+                    description = description,
+                    features = features,
+                ),
+        )
 
     private fun createAndWarmUsbDadb(
         usbManager: UsbManager,

@@ -10,12 +10,16 @@ A Kotlin/Java library for speaking the ADB protocol directly.
 The core `dadb` artifact is a JVM library. Platform-specific transports can be added separately, and
 using a host-side `adb` binary or `adb server` remains a normal supported option.
 
+For module ownership, connection/stream lifecycle, Android pairing and transport flows, and change
+placement guidance, see [Architecture and Responsibilities](ARCHITECTURE.md).
+
 Current platform boundary summary:
 
 - STLS/TLS-capable ADB connection is a general ADB capability, not an Android-only protocol
 - Android USB host transport is Android-specific because it depends on Android USB APIs
 - Wireless Debugging pairing (`adb pair`) is currently provided through `dadb-android`
-- if a host-side `adb` binary is available, the `adb server` path it manages remains a normal, supported backend
+- if a host-side `adb` binary is available, the `adb server` path it manages remains a normal,
+  supported backend
 
 Practical guidance:
 
@@ -30,7 +34,7 @@ Practical guidance:
 
 ```kotlin
 dependencies {
-  implementation("dev.mobile:dadb:<version>")
+    implementation("dev.mobile:dadb:<version>")
 }
 ```
 
@@ -70,7 +74,8 @@ val dadb = Dadb.create(
 )
 ```
 
-This transport is Android-only. Desktop JVM users should use the core `dadb` artifact with direct TCP or a host-side `adb` binary / `adb server`.
+This transport is Android-only. Desktop JVM users should use the core `dadb` artifact with direct
+TCP or a host-side `adb` binary / `adb server`.
 
 ### Experimental Android Runtime Helper
 
@@ -138,14 +143,18 @@ Important boundary:
 
 - the TLS ADB protocol itself is not Android-specific
 - the current pairing/runtime helper layer is Android-specific
-- if you already have a host-side `adb` binary and its `adb server`, you can keep using `AdbServer.createDadb(...)` and do not need the Android runtime helper layer
+- if you already have a host-side `adb` binary and its `adb server`, you can keep using
+  `AdbServer.createDadb(...)` and do not need the Android runtime helper layer
 
 Typical flow:
 
 1. Pair with the device through `AdbRuntime`.
-2. Connect later through the same runtime using one STLS-capable transport for both plain ADB and Wireless Debugging.
-3. If TLS is established, the runtime reports the observed server identity through `onServerTlsPeerObserved`.
-4. Your app can decide whether to ignore it, persist it, compare it to prior observations, or notify the user.
+2. Connect later through the same runtime using one STLS-capable transport for both plain ADB and
+   Wireless Debugging.
+3. If TLS is established, the runtime reports the observed server identity through
+   `onServerTlsPeerObserved`.
+4. Your app can decide whether to ignore it, persist it, compare it to prior observations, or notify
+   the user.
 
 ```kotlin
 @OptIn(ExperimentalDadbAndroidApi::class)
@@ -183,6 +192,34 @@ dadb.use {
 }
 ```
 
+For applications that need an interactive compatibility path and a separate high-throughput path,
+the runtime can return one `DadbSession` that owns both network connections:
+
+```kotlin
+val session = runtime.connectNetworkDadbSession(
+    host = "192.168.0.10",
+    port = 37099,
+    warmStreaming = false,
+)
+
+session.use {
+    // The session itself uses the traditional-ACK primary connection.
+    val user = session.shell("whoami")
+
+    // Start the delayed-ACK connection after the primary path has been accepted by the app.
+    session.warmStreaming()
+    val streaming = session.route(DadbRoute.STREAMING)
+    streaming.open("localabstract:example").use { stream ->
+        // Sustained traffic uses this stream.
+    }
+}
+```
+
+`DadbSession` shares one in-progress streaming connection attempt between callers, retries after a
+failed attempt, and closes both physical connections. For Android USB Host, use
+`createUsbDadbSession()`; both routes reuse one physical USB connection because the ADB interface is
+exclusively claimed.
+
 Current trust model note:
 
 - `AdbRuntime` does not persist endpoint or peer trust state by itself
@@ -208,17 +245,19 @@ val runtime =
 Available policies:
 
 - `AdbTlsTrustPolicy.TrustAll`
-  - default
-  - accept the presented TLS server certificate without endpoint or pin verification
-  - useful when the app wants to observe the peer identity and make its own trust decision
+    - default
+    - accept the presented TLS server certificate without endpoint or pin verification
+    - useful when the app wants to observe the peer identity and make its own trust decision
 - `AdbTlsTrustPolicy.Custom`
-  - provide your own trust manager factory
+    - provide your own trust manager factory
 
 ### Using adb server
 
-If you already have a host-side `adb` binary, you can connect through the `adb server` it manages instead of providing a direct transport.
+If you already have a host-side `adb` binary, you can connect through the `adb server` it manages
+instead of providing a direct transport.
 This is useful on desktop JVM environments where physical devices are already managed by `adb`.
-This path is intentionally still a normal supported option: new TLS, Android USB, or pairing work does not replace or deprecate it.
+This path is intentionally still a normal supported option: new TLS, Android USB, or pairing work
+does not replace or deprecate it.
 For many desktop and server deployments, it is still the easiest path to operate.
 
 ```kotlin
@@ -231,7 +270,8 @@ val dadb = AdbServer.createDadb(
 
 ### Discover a Device
 
-The following discovers and returns a connected device or emulator. If there are multiple it returns the first one found.
+The following discovers and returns a connected device or emulator. If there are multiple it returns
+the first one found.
 
 ```kotlin
 val dadb = Dadb.discover()
@@ -244,7 +284,8 @@ Use the following API if you want to list all available devices:
 val dadbs = Dadb.list()
 ```
 
-If a host-side `adb` binary / `adb server` is available, `Dadb.discover()` and `Dadb.list()` can also return USB-connected physical devices.
+If a host-side `adb` binary / `adb server` is available, `Dadb.discover()` and `Dadb.list()` can
+also return USB-connected physical devices.
 
 ```kotlin
 // Both of these will include any USB-connected devices if they are available
@@ -254,7 +295,8 @@ val dadbs = Dadb.list()
 
 ### Custom Transport
 
-If your ADB packets do not travel over TCP, Android USB host APIs, or a host-side `adb` binary / `adb server`, you can still supply your own transport.
+If your ADB packets do not travel over TCP, Android USB host APIs, or a host-side `adb` binary /
+`adb server`, you can still supply your own transport.
 This is useful for tunnels, in-process bridges, and other bidirectional byte streams.
 
 ```kotlin
@@ -307,7 +349,8 @@ dadb.tcpForward(
 
 ### Authentication
 
-**Dadb will use your adb key at `~/.android/adbkey` by default. If none exists at this location, private and public keys will be generated by dadb.**
+**Dadb will use your adb key at `~/.android/adbkey` by default. If none exists at this location,
+private and public keys will be generated by dadb.**
 
 If you need to specify a custom path to your adb key, use the optional `keyPair` argument:
 

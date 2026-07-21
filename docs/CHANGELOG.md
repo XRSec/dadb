@@ -1,0 +1,111 @@
+# Changelog
+
+### 2.0.0
+
+* **Breaking:** redesigned error model. Transport failures now throw a typed `AdbException`
+  hierarchy (`AdbConnectException`, `AdbAuthException`, `AdbStreamOpenException`,
+  `AdbConnectionClosedException`, `AdbTimeoutException`, `AdbProtocolException`), all extending
+  `IOException`.
+* **Breaking:** operation outcomes are now returned instead of thrown: `install`/`installMultiple`
+  return `InstallResult`, `uninstall` returns `UninstallResult`, `push`/`pull` return `SyncResult`,
+  `root`/`unroot` return `RootResult`.
+* **Breaking:** a connection dropped mid-stream now throws `AdbConnectionClosedException` instead of
+  presenting as a clean end-of-stream.
+* **Breaking:** a read or write that exceeds its timeout now throws `AdbTimeoutException` instead of
+  a raw `SocketTimeoutException`.
+* `pmInstall` (the non-`cmd` install path) now checks the `pm install` result instead of ignoring
+  it.
+* Fixed stream local-id collisions that surfaced as `Not listening for localId` and could tear down
+  a live stream's state; stream ids are now sequential, like AOSP's adb client.
+* Socket writes are now bounded by a write timeout, so a wedged device fails fast instead of
+  blocking a write indefinitely; the connection is rebuilt on the next operation.
+* A stream read parked in `MessageQueue.take()` no longer hangs when the connection closes or a read
+  fails; it now wakes with the relevant `AdbException`.
+* Added opt-in result helpers — `onSuccess`/`onFailure`/`orThrow` on each `…Result` type. `orThrow`
+  raises `AdbOperationFailedException`, which is **not** an `AdbException`, so a transport-level
+  `catch (AdbException)` won't catch an opted-in operation-failure throw.
+
+### 1.2.10
+
+* Creating configuration for enabling keep alive on dadb socket
+
+### 1.2.9
+
+* Various fixes for Windows
+
+### 1.2.8
+
+* Allow streaming apk install
+* Add timeout option when create Dadb
+
+### 1.2.7
+
+* Fix for install on physical devices
+
+### 1.2.6
+
+* When generating adb keys, ensure that parent directories are created if needed
+
+### 1.2.5
+
+* Fix: reverted back refactoring changes from 1.2.1
+
+### 1.2.4
+
+* Fix slow installation in some cases
+
+### 1.2.3
+
+* Fix for AdbSync refactor in 1.2.2
+
+### 1.2.2
+
+* `AdbServerDadb.create` renamed to `AdbServer.createDadb`
+* `Dadb.discover` now supports physical devices (via the adb server)
+* Added `Dadb.list()`
+* Added default host parameter for `Dadb.discover()`
+* Added `AdbServer.listDadbs` (no need to use this directly, use `Dadb.list()`)
+
+### 1.2.1
+
+* Fix push for API 24
+
+### 1.2.0
+
+* Add experimental API AdbServerDadb.create to connect to an adb server
+
+### 1.1.0
+
+* Fix unicode handling
+* Add Dadb.installMultiple
+
+### 1.0.0
+
+* Fix: adbkey.pub is no longer required
+* Updating version to 1.0.0 to be semantically aligned with other mobile.dev libraries
+
+### 0.0.13
+
+* Fix bad release
+
+### 0.0.12
+
+* Make `AdbShellPacket` a sealed class
+
+### 0.0.11
+
+* `Dadb.create` / `Dadb.create` / `Dadb.discover` / `AdbKey.readDefault()` will all generate a key
+  if one is not found in the default location.
+
+### 0.0.10
+
+* Add support for TCP port forwarding
+
+### 0.0.9
+
+* Fix `Dadb.pull` for large files
+
+### 0.0.8
+
+* `Dadb.install` fixed for Android SDK version <= 28
+* `Dadb.create` / `Dadb.discover` uses `~/.android/adbkey` by default
