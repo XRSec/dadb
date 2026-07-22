@@ -130,7 +130,7 @@ object AdbServer {
     }
 }
 
-private class AdbServerDadb constructor(
+private class AdbServerDadb(
     private val host: String,
     private val port: Int,
     private val deviceQuery: String,

@@ -8,7 +8,7 @@ import dadb.android.wireless.internal.AdbMdnsRegistry
 import dadb.android.wireless.internal.AdbMdnsServiceKey
 import dadb.android.wireless.internal.AndroidDiscoveryListener
 import dadb.android.wireless.internal.AndroidResolveListener
-import dadb.android.wireless.internal.AndroidServiceInfoCallback
+import dadb.android.wireless.internal.NsdServiceInfoCallbackRegistration
 import dadb.android.wireless.internal.toAdbMdnsService
 import dadb.android.wireless.internal.toAdbMdnsServiceKey
 import java.util.concurrent.ExecutorService
@@ -25,7 +25,7 @@ internal class AndroidAdbMdnsMonitor(
     private val nsdManager = context.applicationContext.getSystemService(NsdManager::class.java)
     private val registry = AdbMdnsRegistry(config)
     private val callbackExecutor: ExecutorService = newMdnsCallbackExecutor()
-    private val callbacks = mutableMapOf<AdbMdnsServiceKey, NsdManager.ServiceInfoCallback>()
+    private val callbacks = mutableMapOf<AdbMdnsServiceKey, NsdServiceInfoCallbackRegistration>()
     private val lock = Any()
     private var started = false
     private var closed = false
@@ -175,7 +175,10 @@ internal class AndroidAdbMdnsMonitor(
 
         val key = serviceInfo.toAdbMdnsServiceKey(fallbackServiceType = serviceType) ?: return
         val callback =
-            AndroidServiceInfoCallback(
+            NsdServiceInfoCallbackRegistration(
+                nsdManager = nsdManager,
+                serviceInfo = serviceInfo,
+                executor = callbackExecutor,
                 registrationFailedHandler = { onStatusChanged(AdbMdnsStatus.FAILED) },
                 serviceUpdatedHandler = { updatedInfo -> upsertService(updatedInfo, serviceType) },
                 serviceLostHandler = { removeServiceByKey(key) },
@@ -198,7 +201,7 @@ internal class AndroidAdbMdnsMonitor(
         if (!shouldRegister) return
 
         runCatching {
-            nsdManager.registerServiceInfoCallback(serviceInfo, callbackExecutor, callback)
+            callback.register()
         }.onFailure {
             synchronized(lock) {
                 callbacks.remove(key, callback)
@@ -219,7 +222,7 @@ internal class AndroidAdbMdnsMonitor(
     private fun unregisterServiceInfoCallback(key: AdbMdnsServiceKey) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
         val callback = synchronized(lock) { callbacks.remove(key) } ?: return
-        runCatching { nsdManager.unregisterServiceInfoCallback(callback) }
+        runCatching { callback.unregister() }
     }
 
     private fun clearServiceInfoCallbacks() {
@@ -229,7 +232,7 @@ internal class AndroidAdbMdnsMonitor(
                 callbacks.values.toList().also { callbacks.clear() }
             }
         currentCallbacks.forEach { callback ->
-            runCatching { nsdManager.unregisterServiceInfoCallback(callback) }
+            runCatching { callback.unregister() }
         }
     }
 }

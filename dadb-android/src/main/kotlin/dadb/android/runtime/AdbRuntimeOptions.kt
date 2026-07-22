@@ -1,7 +1,7 @@
 package dadb.android.runtime
 
 import dadb.android.tls.AdbTlsTrustManagers
-import javax.net.ssl.X509ExtendedTrustManager
+import javax.net.ssl.X509TrustManager
 
 @ExperimentalDadbAndroidApi
 /**
@@ -54,7 +54,7 @@ sealed interface AdbTlsTrustPolicy {
      * Provide a custom trust manager for TLS server verification.
      */
     class Custom(
-        val createTrustManager: (target: AdbNetworkEndpoint) -> X509ExtendedTrustManager,
+        val createTrustManager: (target: AdbNetworkEndpoint) -> X509TrustManager,
     ) : AdbTlsTrustPolicy
 
     /**
@@ -70,7 +70,7 @@ sealed interface AdbTlsTrustPolicy {
 @OptIn(ExperimentalDadbAndroidApi::class)
 internal fun AdbTlsTrustPolicy.resolveTrustManager(
     target: AdbNetworkEndpoint,
-): X509ExtendedTrustManager =
+): X509TrustManager =
     when (this) {
         AdbTlsTrustPolicy.TrustAll ->
             AdbTlsTrustManagers.createUnsafe()

@@ -402,12 +402,12 @@ interface Dadb : AutoCloseable {
 
     @Throws(IOException::class)
     fun reverseKillAllForwards() {
-        executeAdbService(buildReverseKillAllDestination())
+        executeAdbService(REVERSE_KILL_ALL_DESTINATION)
     }
 
     @Throws(IOException::class)
     fun reverseListForwards(): List<AdbReverseRule> {
-        return parseReverseListOutput(executeAdbService(buildReverseListDestination()))
+        return parseReverseListOutput(executeAdbService(REVERSE_LIST_DESTINATION))
     }
 
     @Throws(IOException::class)
@@ -511,16 +511,16 @@ interface Dadb : AutoCloseable {
 
         private fun restartAdb(dadb: Dadb, destination: String): String {
             dadb.open(destination).use { stream ->
-                return stream.source.readUntil('\n'.code.toByte()).readString(Charsets.UTF_8)
+                return stream.source.readLineBuffer().readString(Charsets.UTF_8)
             }
         }
 
-        private fun BufferedSource.readUntil(endByte: Byte): Buffer {
+        private fun BufferedSource.readLineBuffer(): Buffer {
             val buffer = Buffer()
             while (true) {
                 val b = readByte()
                 buffer.writeByte(b.toInt())
-                if (b == endByte) return buffer
+                if (b == '\n'.code.toByte()) return buffer
             }
         }
 

@@ -97,14 +97,14 @@ internal fun parseForwardListOutput(output: String): List<AdbForwardRule> {
         .toList()
 }
 
-private fun queryHostService(
+private fun AdbServer.queryHostService(
     adbServerHost: String,
     adbServerPort: Int,
     command: String,
 ): String {
     AdbBinary.ensureServerRunning(adbServerHost, adbServerPort)
     return Socket(adbServerHost, adbServerPort).use { socket ->
-        AdbServer.send(socket, command)
-        AdbServer.readString(DataInputStream(socket.getInputStream()))
+        send(socket, command)
+        readString(DataInputStream(socket.getInputStream()))
     }
 }

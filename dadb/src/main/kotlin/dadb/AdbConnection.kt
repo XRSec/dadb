@@ -37,7 +37,6 @@ internal class AdbConnection internal constructor(
         private val closeable: AutoCloseable?,
         private val supportedFeatures: Set<String>,
         private val delayedAckEnabled: Boolean,
-        private val version: Int,
         private val maxPayloadSize: Int,
         private val tlsUpgraded: Boolean,
 ) : AutoCloseable {
@@ -354,7 +353,6 @@ internal class AdbConnection internal constructor(
                 closeable,
                 peerFeatures,
                 delayedAckEnabled,
-                version,
                 maxPayloadSize,
                 tlsUpgraded,
             )

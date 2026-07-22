@@ -81,7 +81,6 @@ class AdbPairingProtocolTest {
         val stopped =
             PairingClientStateMachine.afterPeerInfoExchange(
                 exchangingPeerInfo,
-                success = true,
             )
 
         assertEquals(PairingClientState.EXCHANGING_MSGS, exchangingMsgs)
@@ -106,7 +105,7 @@ class AdbPairingProtocolTest {
     fun stateMachine_rejectsInvalidTransition() {
         val error =
             try {
-                PairingClientStateMachine.afterPeerInfoExchange(PairingClientState.READY, success = true)
+                PairingClientStateMachine.afterPeerInfoExchange(PairingClientState.READY)
                 null
             } catch (t: IllegalStateException) {
                 t

@@ -15,7 +15,7 @@ import java.security.interfaces.RSAPrivateKey
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509ExtendedKeyManager
-import javax.net.ssl.X509ExtendedTrustManager
+import javax.net.ssl.X509TrustManager
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.cert.X509v3CertificateBuilder
@@ -25,7 +25,7 @@ import org.conscrypt.Conscrypt
 internal object AdbTlsContexts {
     fun create(
         keyPair: AdbKeyPair,
-        trustManager: X509ExtendedTrustManager,
+        trustManager: X509TrustManager,
     ): SSLContext {
         val privateKey = keyPair.privateKey()
         val certificate = createCertificate(privateKey)
@@ -122,7 +122,7 @@ internal object AdbTlsContexts {
         }
 
     @Suppress("CustomX509TrustManager", "TrustAllX509TrustManager")
-    private fun createInsecureTrustManager(): X509ExtendedTrustManager =
+    private fun createInsecureTrustManager(): X509TrustManager =
         AdbTlsTrustManagers.createUnsafe()
 
     private fun ensureConscryptProvider(): Provider {

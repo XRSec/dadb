@@ -49,7 +49,6 @@ internal class AdbMessage(
         return  "payload[$payloadLength]"
     }
 
-    @Suppress("UsePropertyAccessSyntax")
     private fun shellPayloadStr(): String? {
         val source: BufferedSource = getSource()
         if (source.buffer.size < 5) return null
@@ -78,13 +77,13 @@ internal class AdbMessage(
     private fun argStr(arg: Int) = String.format("%X", arg)
 
     private fun commandStr() = when (command) {
-        Constants.CMD_AUTH -> "AUTH";
-        Constants.CMD_CNXN -> "CNXN";
-        Constants.CMD_STLS -> "STLS";
-        Constants.CMD_OPEN -> "OPEN";
-        Constants.CMD_OKAY -> "OKAY";
-        Constants.CMD_CLSE -> "CLSE";
-        Constants.CMD_WRTE -> "WRTE";
+        Constants.CMD_AUTH -> "AUTH"
+        Constants.CMD_CNXN -> "CNXN"
+        Constants.CMD_STLS -> "STLS"
+        Constants.CMD_OPEN -> "OPEN"
+        Constants.CMD_OKAY -> "OKAY"
+        Constants.CMD_CLSE -> "CLSE"
+        Constants.CMD_WRTE -> "WRTE"
         else -> "????"
     }
 }

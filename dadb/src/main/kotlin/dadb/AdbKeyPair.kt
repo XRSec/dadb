@@ -346,7 +346,7 @@ class AdbKeyPair(
             publicKeyFile.absoluteFile.parentFile?.mkdirs()
 
             privateKeyFile.writer().use { out ->
-                val base64 = Base64.Default.encode(keyPair.private.encoded).chunked(64).joinToString("\n")
+                val base64 = Base64.encode(keyPair.private.encoded).chunked(64).joinToString("\n")
                 out.write("-----BEGIN PRIVATE KEY-----\n")
                 out.write(base64)
                 out.write("\n-----END PRIVATE KEY-----")
@@ -354,7 +354,7 @@ class AdbKeyPair(
 
             publicKeyFile.writer().use { out ->
                 val bytes = convertRsaPublicKeyToAdbFormat(keyPair.public as RSAPublicKey)
-                out.write(Base64.Default.encode(bytes))
+                out.write(Base64.encode(bytes))
                 out.write(" ${normalizePublicKeyOwner(publicKeyOwner)}")
             }
         }

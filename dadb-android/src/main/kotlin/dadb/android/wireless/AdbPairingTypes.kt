@@ -22,10 +22,10 @@ import java.security.interfaces.RSAPublicKey
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.X509ExtendedKeyManager
-import javax.net.ssl.X509ExtendedTrustManager
+import javax.net.ssl.X509TrustManager
 
 internal class AdbPairingKey(
-    private val adbKeyPair: AdbKeyPair,
+    adbKeyPair: AdbKeyPair,
 ) {
     private val keyAlias = adbKeyPair.adbPublicKey().decodeAdbKeyAlias()
 
@@ -103,8 +103,8 @@ internal class AdbPairingKey(
         }
 
     @get:Suppress("CustomX509TrustManager", "TrustAllX509TrustManager")
-    private val trustManager: X509ExtendedTrustManager
-        get() = object : X509ExtendedTrustManager() {
+    private val trustManager: X509TrustManager
+        get() = object : X509TrustManager {
             private fun accept(
                 chain: Array<out X509Certificate>?,
                 authType: String?,
@@ -116,30 +116,6 @@ internal class AdbPairingKey(
             override fun checkClientTrusted(
                 chain: Array<out X509Certificate>?,
                 authType: String?,
-                socket: Socket?,
-            ) = accept(chain, authType)
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
-            ) = accept(chain, authType)
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-            ) = accept(chain, authType)
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                socket: Socket?,
-            ) = accept(chain, authType)
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
             ) = accept(chain, authType)
 
             override fun checkServerTrusted(

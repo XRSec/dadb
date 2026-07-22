@@ -35,6 +35,7 @@ interface AdbTransport : AutoCloseable {
 
     val sink: Sink
 
+    @get:Suppress("SameReturnValue")
     val connectMaxData: Int
         get() = Constants.CONNECT_MAXDATA
 

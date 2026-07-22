@@ -34,9 +34,9 @@ internal fun buildReverseKillDestination(device: String): String {
     return "reverse:killforward:$device"
 }
 
-internal fun buildReverseKillAllDestination(): String = "reverse:killforward-all"
+internal const val REVERSE_KILL_ALL_DESTINATION = "reverse:killforward-all"
 
-internal fun buildReverseListDestination(): String = "reverse:list-forward"
+internal const val REVERSE_LIST_DESTINATION = "reverse:list-forward"
 
 internal fun parseAdbServiceResponse(raw: String): AdbServiceResponse {
     return when {

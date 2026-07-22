@@ -2,7 +2,6 @@ package dadb.android.tls
 
 import java.io.IOException
 import java.net.SocketTimeoutException
-import java.nio.channels.InterruptedByTimeoutException
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLProtocolException
@@ -28,7 +27,11 @@ internal object AdbTlsErrorMapper {
             return AdbTlsAuthException()
         }
 
-        if (generateSequence(throwable) { it.cause }.any { it is InterruptedByTimeoutException || it is SocketTimeoutException }) {
+        if (
+            generateSequence(throwable) { it.cause }.any {
+                it is SocketTimeoutException || it.javaClass.name == INTERRUPTED_BY_TIMEOUT_EXCEPTION
+            }
+        ) {
             return IOException("TLS handshake timeout", throwable)
         }
 
@@ -44,3 +47,5 @@ internal object AdbTlsErrorMapper {
         return throwable
     }
 }
+
+private const val INTERRUPTED_BY_TIMEOUT_EXCEPTION = "java.nio.channels.InterruptedByTimeoutException"

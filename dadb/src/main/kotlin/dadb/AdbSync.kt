@@ -418,9 +418,9 @@ class AdbSyncStream(
         }
     }
 
-    private fun writePacket(id: String, arg: Int) {
+    private fun writeQuitPacket() {
         stream.sink.apply {
-            writeFrameHeader(id, arg)
+            writeFrameHeader(QUIT, 0)
             flush()
         }
     }
@@ -481,7 +481,7 @@ class AdbSyncStream(
     private fun readUInt32AsLong(): Long = stream.source.readIntLe().toLong() and 0xFFFF_FFFFL
 
     override fun close() {
-        writePacket(QUIT, 0)
+        writeQuitPacket()
         stream.close()
     }
 }

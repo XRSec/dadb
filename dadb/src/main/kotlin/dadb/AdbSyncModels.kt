@@ -39,7 +39,11 @@ class AdbSyncDirEntry(
 
 /**
  * Full list_v2 entry aligned with AOSP sync_dent_v2.
+ *
+ * Every field is part of the wire result even when the current app only consumes
+ * the portable directory-listing subset.
  */
+@Suppress("unused")
 class AdbSyncDirEntryV2(
     val name: String,
     val errorCode: Int,

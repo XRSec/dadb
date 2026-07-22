@@ -36,7 +36,9 @@ class AdbAuthException(message: String, cause: Throwable? = null) : AdbException
 
 /** adbd refused to OPEN the stream (A_OPEN answered with A_CLSE): unknown/forbidden service string,
  *  or device offline. The underlying connection is still usable. */
+@Suppress("unused")
 class AdbStreamOpenException(
+    @Suppress("unused", "UNUSED_PARAMETER")
     val destination: String,
     message: String,
     cause: Throwable? = null

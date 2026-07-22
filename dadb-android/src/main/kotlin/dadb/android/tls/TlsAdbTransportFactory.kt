@@ -9,7 +9,7 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.X509ExtendedTrustManager
+import javax.net.ssl.X509TrustManager
 import okio.Sink
 import okio.Source
 import okio.sink
@@ -26,7 +26,7 @@ import okio.Timeout
  *
  * The convenience constructor that only takes an [AdbKeyPair] uses an insecure trust policy so it
  * can interoperate with self-signed Wireless Debugging peers. Callers that have a stricter trust
- * strategy should provide a custom [SSLSocketFactory] or [X509ExtendedTrustManager].
+ * strategy should provide a custom [SSLSocketFactory] or [X509TrustManager].
  */
 class TlsAdbTransportFactory(
     private val host: String,
@@ -59,7 +59,7 @@ class TlsAdbTransportFactory(
         host: String,
         port: Int,
         keyPair: AdbKeyPair,
-        trustManager: X509ExtendedTrustManager,
+        trustManager: X509TrustManager,
         connectTimeout: Int = 0,
         socketTimeout: Int = 0,
         configureSocket: (SSLSocket) -> Unit = {},
@@ -94,7 +94,7 @@ class TlsAdbTransportFactory(
 }
 
 private class UpgradableTlsSocketAdbTransport(
-    private val socket: Socket,
+    socket: Socket,
     private val host: String,
     private val port: Int,
     private val socketFactory: SSLSocketFactory,

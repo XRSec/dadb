@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
 public final class TcpRelayMain {
     private static final int CONNECT_TIMEOUT_MILLIS = 10_000;
     private static final Pattern FORWARD_PATTERN =
-            Pattern.compile("^tcp://(?:(?:127\\.0\\.0\\.1|localhost))?:(\\d{1,5})/([A-Za-z0-9.-]+):(\\d{1,5})$");
+            Pattern.compile("^tcp://(?:127\\.0\\.0\\.1|localhost)?:(\\d{1,5})/([A-Za-z0-9.-]+):(\\d{1,5})$");
 
     private TcpRelayMain() {
     }
@@ -179,45 +179,27 @@ public final class TcpRelayMain {
         }
     }
 
-    private static final class ForwardSpec {
-        final int localPort;
-        final String targetHost;
-        final int targetPort;
-
-        ForwardSpec(int localPort, String targetHost, int targetPort) {
-            this.localPort = localPort;
-            this.targetHost = targetHost;
-            this.targetPort = targetPort;
-        }
+    private record ForwardSpec(int localPort, String targetHost, int targetPort) {
 
         static ForwardSpec parse(String argument) {
-            Matcher matcher = FORWARD_PATTERN.matcher(argument);
-            if (!matcher.matches()) {
-                throw new IllegalArgumentException("invalid forward: " + argument);
+                Matcher matcher = FORWARD_PATTERN.matcher(argument);
+                if (!matcher.matches()) {
+                    throw new IllegalArgumentException("invalid forward: " + argument);
+                }
+                int localPort = parsePort(matcher.group(1));
+                int targetPort = parsePort(matcher.group(3));
+                return new ForwardSpec(localPort, matcher.group(2), targetPort);
             }
-            int localPort = parsePort(matcher.group(1));
-            int targetPort = parsePort(matcher.group(3));
-            return new ForwardSpec(localPort, matcher.group(2), targetPort);
-        }
 
-        private static int parsePort(String value) {
-            int port = Integer.parseInt(value);
-            if (port < 1 || port > 65_535) {
-                throw new IllegalArgumentException("port out of range: " + value);
+            private static int parsePort(String value) {
+                int port = Integer.parseInt(value);
+                if (port < 1 || port > 65_535) {
+                    throw new IllegalArgumentException("port out of range: " + value);
+                }
+                return port;
             }
-            return port;
         }
-    }
 
-    private static final class ListenerBinding {
-        final ForwardSpec spec;
-        final String bindHost;
-        final ServerSocket server;
-
-        ListenerBinding(ForwardSpec spec, String bindHost, ServerSocket server) {
-            this.spec = spec;
-            this.bindHost = bindHost;
-            this.server = server;
-        }
+    private record ListenerBinding(ForwardSpec spec, String bindHost, ServerSocket server) {
     }
 }

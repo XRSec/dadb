@@ -103,6 +103,7 @@ internal enum class PairingClientState {
 }
 
 internal object PairingClientStateMachine {
+    @Suppress("SameReturnValue")
     fun start(state: PairingClientState): PairingClientState {
         check(state == PairingClientState.READY) { "Pairing client can only start from READY, was $state" }
         return PairingClientState.EXCHANGING_MSGS
@@ -118,9 +119,9 @@ internal object PairingClientStateMachine {
         return if (success) PairingClientState.EXCHANGING_PEER_INFO else PairingClientState.STOPPED
     }
 
+    @Suppress("SameReturnValue")
     fun afterPeerInfoExchange(
         state: PairingClientState,
-        success: Boolean,
     ): PairingClientState {
         check(state == PairingClientState.EXCHANGING_PEER_INFO) {
             "Peer info exchange can only complete from EXCHANGING_PEER_INFO, was $state"
@@ -227,7 +228,7 @@ internal class DirectAdbPairingClient(
         }
 
         val peerMetadata = doExchangePeerInfo()
-        state = PairingClientStateMachine.afterPeerInfoExchange(state, peerMetadata != null)
+        state = PairingClientStateMachine.afterPeerInfoExchange(state)
         if (peerMetadata == null) {
             return null
         }
@@ -356,8 +357,18 @@ private fun SSLSocket.peerLeafCertificate(): X509Certificate? =
 internal data class PairingSessionMetadata(
     val peerAdbPublicKey: ByteArray,
     val pairingTlsPublicKeySha256Base64: String?,
-)
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PairingSessionMetadata) return false
+        return peerAdbPublicKey.contentEquals(other.peerAdbPublicKey) &&
+            pairingTlsPublicKeySha256Base64 == other.pairingTlsPublicKeySha256Base64
+    }
 
-private data class PairingPeerMetadata(
+    override fun hashCode(): Int =
+        31 * peerAdbPublicKey.contentHashCode() + (pairingTlsPublicKeySha256Base64?.hashCode() ?: 0)
+}
+
+private class PairingPeerMetadata(
     val adbPublicKey: ByteArray,
 )

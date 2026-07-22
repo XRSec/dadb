@@ -2,16 +2,15 @@ package dadb.android.tls
 
 import dadb.android.runtime.AdbNetworkEndpoint
 import dadb.android.runtime.ExperimentalDadbAndroidApi
-import java.net.Socket
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
-import javax.net.ssl.SSLEngine
-import javax.net.ssl.X509ExtendedTrustManager
+import javax.net.ssl.X509TrustManager
 
 @OptIn(ExperimentalDadbAndroidApi::class)
+@Suppress("CustomX509TrustManager", "TrustAllX509TrustManager")
 internal object AdbTlsTrustManagers {
-    fun createUnsafe(): X509ExtendedTrustManager =
-        object : X509ExtendedTrustManager() {
+    fun createUnsafe(): X509TrustManager =
+        object : X509TrustManager {
             private fun accept(
                 chain: Array<out X509Certificate>?,
                 authType: String?,
@@ -23,30 +22,6 @@ internal object AdbTlsTrustManagers {
             override fun checkClientTrusted(
                 chain: Array<out X509Certificate>?,
                 authType: String?,
-                socket: Socket?,
-            ) = accept(chain, authType)
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
-            ) = accept(chain, authType)
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-            ) = accept(chain, authType)
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                socket: Socket?,
-            ) = accept(chain, authType)
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
             ) = accept(chain, authType)
 
             override fun checkServerTrusted(
@@ -60,8 +35,8 @@ internal object AdbTlsTrustManagers {
     fun createPinned(
         target: AdbNetworkEndpoint,
         expectedPinSha256Base64: String,
-    ): X509ExtendedTrustManager =
-        object : X509ExtendedTrustManager() {
+    ): X509TrustManager =
+        object : X509TrustManager {
             private fun checkPinnedChain(chain: Array<out X509Certificate>?) {
                 val leaf =
                     chain?.firstOrNull()
@@ -79,31 +54,7 @@ internal object AdbTlsTrustManagers {
             override fun checkClientTrusted(
                 chain: Array<out X509Certificate>?,
                 authType: String?,
-                socket: Socket?,
             ) = Unit
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
-            ) = Unit
-
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-            ) = Unit
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                socket: Socket?,
-            ) = checkPinnedChain(chain)
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?,
-                engine: SSLEngine?,
-            ) = checkPinnedChain(chain)
 
             override fun checkServerTrusted(
                 chain: Array<out X509Certificate>?,
