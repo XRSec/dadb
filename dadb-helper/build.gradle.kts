@@ -61,7 +61,7 @@ val dexHelperClasses = tasks.register<Exec>("dexHelperClasses") {
     commandLine(
         d8Executable.absolutePath,
         "--min-api",
-        "23",
+        "21",
         "--lib",
         androidJar.absolutePath,
         "--output",

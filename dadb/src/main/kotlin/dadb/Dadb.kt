@@ -20,8 +20,6 @@ package dadb
 import dadb.adbserver.AdbServer
 import dadb.forwarding.TcpForwarder
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.FileSystems
 import okio.*
 
 interface Dadb : AutoCloseable {
@@ -31,30 +29,44 @@ interface Dadb : AutoCloseable {
 
     fun supportsFeature(feature: String): Boolean
 
+    /**
+     * Stops using a feature that the peer advertised but refused when its service was opened.
+     * Implementations with connection-scoped feature state may remember the rejection.
+     */
+    fun markFeatureRejected(feature: String) = Unit
+
     fun isTlsConnection(): Boolean
 
     @Throws(AdbException::class)
-    fun shell(command: String): AdbShellResponse {
-        return if (supportsFeature(SHELL_V2_FEATURE)) {
-            openShell(command).use { stream ->
-                stream.readAll()
-            }
-        } else {
-            open(buildShellService(command, useShellProtocol = false)).use { stream ->
-                AdbShellResponse(
-                    output = stream.source.readString(Charsets.UTF_8),
-                    errorOutput = "",
-                    exitCode = 0,
-                )
-            }
+    fun shell(command: String): AdbShellResponse =
+        openShell(command).use { stream ->
+            stream.readAll()
         }
-    }
 
+    /**
+     * Opens a streaming shell using shell_v2 when advertised by the peer, otherwise legacy shell.
+     *
+     * Legacy shell merges stderr into stdout and does not report the remote exit code, so
+     * [AdbShellStream] emits a synthetic zero exit packet when the raw stream reaches EOF.
+     */
     @Throws(AdbException::class)
     fun openShell(command: String = ""): AdbShellStream {
-        requireShellV2("openShell")
-        val stream = open(buildShellService(command, useShellProtocol = true))
-        return AdbShellStream(stream)
+        val useShellProtocol = supportsFeature(SHELL_V2_FEATURE)
+        if (useShellProtocol) {
+            try {
+                return AdbShellStream(
+                    stream = open(buildShellService(command, useShellProtocol = true)),
+                    protocol = AdbShellProtocol.SHELL_V2,
+                )
+            } catch (error: AdbStreamOpenException) {
+                markFeatureRejected(SHELL_V2_FEATURE)
+            }
+        }
+        val stream = open(buildShellService(command, useShellProtocol = false))
+        return AdbShellStream(
+            stream = stream,
+            protocol = AdbShellProtocol.LEGACY,
+        )
     }
 
     @Throws(AdbException::class)
@@ -437,9 +449,6 @@ interface Dadb : AutoCloseable {
         private const val MAX_EMULATOR_PORT = 5683
         private const val DEFAULT_MODE = 0b110100100
         const val FEATURE_DELAYED_ACK = "delayed_ack"
-        private val isPosixFs: Boolean by lazy {
-            FileSystems.getDefault().supportedFileAttributeViews().contains("posix")
-        }
 
         @JvmStatic
         @JvmOverloads
@@ -524,12 +533,7 @@ interface Dadb : AutoCloseable {
             }
         }
 
-        private fun readMode(file: File): Int {
-            if (!isPosixFs) {
-                return DEFAULT_MODE
-            }
-            val mode = Files.getAttribute(file.toPath(), "unix:mode") as? Int
-            return mode ?: DEFAULT_MODE
-        }
+        private fun readMode(file: File): Int =
+            PlatformApiCompat.readLocalFileMode(file, DEFAULT_MODE)
     }
 }

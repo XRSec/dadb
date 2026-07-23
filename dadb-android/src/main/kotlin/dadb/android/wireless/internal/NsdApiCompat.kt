@@ -5,7 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import java.util.concurrent.Executor
 
-/** Keeps API 34 NSD callback types out of the API 23-compatible monitor implementation. */
+/** Keeps API 34 NSD callback types out of the API 21-compatible monitor implementation. */
 @SuppressLint("NewApi")
 internal class NsdServiceInfoCallbackRegistration(
     private val nsdManager: NsdManager,

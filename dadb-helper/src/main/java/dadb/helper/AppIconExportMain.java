@@ -1,7 +1,12 @@
 package dadb.helper;
 
 import android.annotation.SuppressLint;
+import android.app.Application;
+import android.content.AttributionSource;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -14,10 +19,16 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Base64;
 import android.util.TypedValue;
+import android.view.InputDevice;
+import android.view.InputEvent;
+import android.view.KeyCharacterMap;
+import android.view.KeyEvent;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -39,7 +50,7 @@ import java.util.zip.ZipOutputStream;
 
 @SuppressLint("PrivateApi")
 public final class AppIconExportMain {
-    private static final String HELPER_VERSION = "1.2.0";
+    private static final String HELPER_VERSION = "1.3.1";
     private static final String VERSION_MISMATCH_MARKER = "DADB_HELPER_VERSION_MISMATCH";
     private static final int ICON_SIZE = 48;
     private static final int MAX_ICON_THREADS = 4;
@@ -53,6 +64,7 @@ public final class AppIconExportMain {
                     "iconprobe <packageName> | list <offset> <limit> <includeSystem> | " +
                     "appdata <includeUser> <includeSystem> <includeEnabled> <includeDisabled> <fields> <packagesBase64> | " +
                     "queries <requestBase64> | " +
+                    "input_text <textBase64> | " +
                     "icons <requestBase64> | " +
                     "icon <packageName> [localHash]";
 
@@ -233,6 +245,19 @@ public final class AppIconExportMain {
         if ("context".equals(command)) {
             Context systemContext = Objects.requireNonNull(context, "System context is required");
             System.out.println("CONTEXT_OK\t" + systemContext.getClass().getName());
+            return;
+        }
+
+        if ("input_text".equals(command)) {
+            if (args.length < 2) {
+                System.err.println("usage: input_text <textBase64>");
+                System.exit(2);
+                return;
+            }
+            handleInputTextCommand(
+                    Objects.requireNonNull(context, "System context is required"),
+                    args[1]
+            );
             return;
         }
 
@@ -1067,7 +1092,100 @@ public final class AppIconExportMain {
     }
 
     private static boolean requiresSystemContext(String command) {
-        return "probe_systemcontext".equals(command) || "context".equals(command);
+        return "probe_systemcontext".equals(command)
+                || "context".equals(command)
+                || "input_text".equals(command);
+    }
+
+    private static void handleInputTextCommand(Context systemContext, String textBase64)
+            throws Exception {
+        byte[] textBytes = Base64.decode(textBase64, Base64.DEFAULT);
+        String text = new String(textBytes, StandardCharsets.UTF_8);
+        Context shellContext = new ShellContext(systemContext);
+
+        ClipboardManager clipboardManager =
+                (ClipboardManager) shellContext.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboardManager == null) {
+            throw new IllegalStateException("Clipboard service is unavailable");
+        }
+        java.lang.reflect.Field contextField =
+                ClipboardManager.class.getDeclaredField("mContext");
+        contextField.setAccessible(true);
+        contextField.set(clipboardManager, shellContext);
+        clipboardManager.setPrimaryClip(ClipData.newPlainText(null, text));
+
+        android.hardware.input.InputManager inputManager =
+                (android.hardware.input.InputManager) shellContext.getSystemService(Context.INPUT_SERVICE);
+        if (inputManager == null) {
+            throw new IllegalStateException("Input service is unavailable");
+        }
+        java.lang.reflect.Method injectInputEvent =
+                android.hardware.input.InputManager.class.getMethod(
+                        "injectInputEvent",
+                        InputEvent.class,
+                        int.class
+                );
+        long now = SystemClock.uptimeMillis();
+        KeyEvent down =
+                new KeyEvent(
+                        now,
+                        now,
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_PASTE,
+                        0,
+                        0,
+                        KeyCharacterMap.VIRTUAL_KEYBOARD,
+                        0,
+                        KeyEvent.FLAG_FROM_SYSTEM,
+                        InputDevice.SOURCE_KEYBOARD
+                );
+        KeyEvent up = KeyEvent.changeAction(down, KeyEvent.ACTION_UP);
+        boolean downInjected =
+                (Boolean) injectInputEvent.invoke(inputManager, down, 1);
+        boolean upInjected =
+                (Boolean) injectInputEvent.invoke(inputManager, up, 1);
+        if (!downInjected || !upInjected) {
+            throw new IllegalStateException("Paste key event injection failed");
+        }
+        System.out.println("INPUT_TEXT_OK");
+    }
+
+    private static final class ShellContext extends ContextWrapper {
+        private static final String SHELL_PACKAGE_NAME = "com.android.shell";
+
+        ShellContext(Context base) {
+            super(base);
+        }
+
+        @Override
+        public String getPackageName() {
+            return SHELL_PACKAGE_NAME;
+        }
+
+        @Override
+        public String getOpPackageName() {
+            return SHELL_PACKAGE_NAME;
+        }
+
+        @Override
+        public Context getApplicationContext() {
+            return this;
+        }
+
+        @Override
+        public Context createPackageContext(String packageName, int flags) {
+            return this;
+        }
+
+        @Override
+        public AttributionSource getAttributionSource() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                return new AttributionSource.Builder(android.os.Process.SHELL_UID)
+                        .setPackageName(SHELL_PACKAGE_NAME)
+                        .build();
+            }
+            return super.getAttributionSource();
+        }
     }
 
     private static PackageManager getPackageManager(Context context) throws Exception {
@@ -1083,6 +1201,7 @@ public final class AppIconExportMain {
         getSystemContext.setAccessible(true);
         Context systemContext =
                 (Context) getSystemContext.invoke(activityThread);
+        initializeCurrentApplication(activityThread, systemContext);
         android.content.res.Configuration deviceConfiguration = resolveDeviceConfiguration();
         if (deviceConfiguration != null) {
             try {
@@ -1091,6 +1210,29 @@ public final class AppIconExportMain {
             }
         }
         return systemContext;
+    }
+
+    private static void initializeCurrentApplication(
+            Object activityThread,
+            Context systemContext
+    ) {
+        try {
+            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Field initialApplicationField =
+                    activityThreadClass.getDeclaredField("mInitialApplication");
+            initialApplicationField.setAccessible(true);
+            if (initialApplicationField.get(activityThread) != null) {
+                return;
+            }
+
+            Application application = new Application();
+            java.lang.reflect.Method attachBaseContext =
+                    ContextWrapper.class.getDeclaredMethod("attachBaseContext", Context.class);
+            attachBaseContext.setAccessible(true);
+            attachBaseContext.invoke(application, systemContext);
+            initialApplicationField.set(activityThread, application);
+        } catch (Throwable ignored) {
+        }
     }
 
     @SuppressWarnings("JavaReflectionMemberAccess")
@@ -1209,10 +1351,27 @@ public final class AppIconExportMain {
             throw new Resources.NotFoundException("Application has no icon resource");
         }
         Resources resources = packageManager.getResourcesForApplication(applicationInfo);
+        try {
+            Drawable drawable = resources.getDrawable(applicationInfo.icon, null);
+            if (drawable != null) {
+                return drawableToBitmap(drawable);
+            }
+        } catch (RuntimeException ignored) {
+            // Some app_process environments cannot inflate framework drawables. Keep the
+            // resource parser below as a fallback for those devices.
+        }
         Bitmap bitmap = renderIconResource(resources, applicationInfo.icon, 0);
         if (bitmap == null) {
             throw new Resources.NotFoundException("Unable to render application icon resource");
         }
+        return bitmap;
+    }
+
+    private static Bitmap drawableToBitmap(Drawable drawable) {
+        Bitmap bitmap = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        drawable.setBounds(0, 0, ICON_SIZE, ICON_SIZE);
+        drawable.draw(canvas);
         return bitmap;
     }
 

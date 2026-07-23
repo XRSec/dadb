@@ -112,11 +112,11 @@ data class RemoteHelperFileState(
     val detail: String,
 )
 
-const val DADB_DEVICE_HELPER_VERSION = "1.2.0"
+const val DADB_DEVICE_HELPER_VERSION = "1.3.1"
 const val DEFAULT_REMOTE_HELPER_PATH = "/data/local/tmp/dadb-device-helper.jar"
 private const val HELPER_MISSING_MARKER = "DADB_HELPER_MISSING"
 private const val HELPER_VERSION_MISMATCH_MARKER = "DADB_HELPER_VERSION_MISMATCH"
-private const val FORCE_PUSH =  true
+private const val FORCE_PUSH =  false
 
 @Throws(IOException::class)
 fun Dadb.loadAppIconWithHelper(
@@ -492,6 +492,29 @@ fun Dadb.prepareRemoteAppIconHelper(
         exists = true,
         detail = "Helper hash verified",
     )
+}
+
+@Throws(IOException::class)
+fun Dadb.injectRemoteTextWithHelper(
+    text: String,
+    localHelperJar: File,
+    remoteHelperPath: String = DEFAULT_REMOTE_HELPER_PATH,
+) {
+    require(text.isNotEmpty()) { "Text must not be empty" }
+    require(localHelperJar.exists()) { "Local helper jar not found: ${localHelperJar.absolutePath}" }
+    val encodedText = text.toByteArray(Charsets.UTF_8).toByteString().base64()
+    val response =
+        invokeRemoteHelperWithUploadRetry(
+            args = listOf("input_text", encodedText),
+            remoteHelperPath = remoteHelperPath,
+            localHelperJar = localHelperJar,
+        )
+    if (response.exitCode != 0 || response.output.trim() != "INPUT_TEXT_OK") {
+        throw IOException(
+            "Remote text input helper failed (exit=${response.exitCode}) " +
+                "stdout=${response.output.trim()} stderr=${response.errorOutput.trim()}",
+        )
+    }
 }
 
 @Throws(IOException::class)

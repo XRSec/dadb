@@ -24,6 +24,7 @@ import java.io.EOFException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.jvm.Throws
 
@@ -76,11 +77,16 @@ internal class DadbImpl @Throws(IllegalArgumentException::class) constructor(
     }
 
     private var connection: Pair<AdbConnection, AdbTransport>? = null
+    private val rejectedFeatures = ConcurrentHashMap.newKeySet<String>()
 
     override fun open(destination: String) = openWithRetry(destination)
 
     override fun supportsFeature(feature: String): Boolean {
-        return connection().supportsFeature(feature)
+        return feature !in rejectedFeatures && connection().supportsFeature(feature)
+    }
+
+    override fun markFeatureRejected(feature: String) {
+        rejectedFeatures += feature
     }
 
     override fun isTlsConnection(): Boolean {

@@ -10,7 +10,7 @@ android {
     ndkVersion = "30.0.15729638"
 
     defaultConfig {
-        minSdk = 23
+        minSdk = 21
 
         @Suppress("UnstableApiUsage")
         externalNativeBuild {
@@ -19,7 +19,7 @@ android {
                 arguments +=
                     listOf(
                         "-DANDROID_STL=c++_shared",
-                        "-DANDROID_PLATFORM=android-23",
+                        "-DANDROID_PLATFORM=android-21",
                     )
             }
         }

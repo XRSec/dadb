@@ -22,7 +22,8 @@ internal class AndroidAdbMdnsMonitor(
     context: Context,
     private val config: AdbMdnsConfig,
 ) : AdbMdnsMonitor {
-    private val nsdManager = context.applicationContext.getSystemService(NsdManager::class.java)
+    private val nsdManager =
+        context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val registry = AdbMdnsRegistry(config)
     private val callbackExecutor: ExecutorService = newMdnsCallbackExecutor()
     private val callbacks = mutableMapOf<AdbMdnsServiceKey, NsdServiceInfoCallbackRegistration>()

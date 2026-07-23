@@ -16,10 +16,12 @@
 
 package dadb
 
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Selects the connection characteristics needed by an operation. */
@@ -51,15 +53,18 @@ class DadbSession @JvmOverloads constructor(
     private val closed = AtomicBoolean(false)
     private val streamingExecutor: ExecutorService? =
         streamingFactory?.let {
-            Executors.newSingleThreadExecutor { runnable ->
-                Thread(runnable, "dadb-streaming-connection").apply { isDaemon = true }
-            }
+            Executors.newSingleThreadExecutor(
+                object : ThreadFactory {
+                    override fun newThread(runnable: Runnable): Thread =
+                        Thread(runnable, "dadb-streaming-connection").apply { isDaemon = true }
+                },
+            )
         }
 
     @Volatile
     private var streaming: Dadb? = null
 
-    private var streamingAttempt: CompletableFuture<Dadb>? = null
+    private var streamingAttempt: FutureTask<Dadb>? = null
 
     val hasDedicatedStreamingRoute: Boolean
         get() = streamingFactory != null
@@ -73,6 +78,10 @@ class DadbSession @JvmOverloads constructor(
     override fun open(destination: String): AdbStream = primary.open(destination)
 
     override fun supportsFeature(feature: String): Boolean = primary.supportsFeature(feature)
+
+    override fun markFeatureRejected(feature: String) {
+        primary.markFeatureRejected(feature)
+    }
 
     override fun isTlsConnection(): Boolean = primary.isTlsConnection()
 
@@ -133,7 +142,7 @@ class DadbSession @JvmOverloads constructor(
         if (!closed.compareAndSet(false, true)) return
 
         val secondary: Dadb?
-        val attempt: CompletableFuture<Dadb>?
+        val attempt: FutureTask<Dadb>?
         synchronized(lock) {
             secondary = streaming
             streaming = null
@@ -148,27 +157,31 @@ class DadbSession @JvmOverloads constructor(
         runCatching { primary.close() }
     }
 
-    private fun streamingAttempt(): CompletableFuture<Dadb> {
-        streamingAttempt?.takeUnless { it.isCancelled || it.isCompletedExceptionally }?.let { return it }
+    private fun streamingAttempt(): FutureTask<Dadb> {
+        streamingAttempt?.takeUnless { it.isCancelled }?.let { return it }
         val factory = checkNotNull(streamingFactory)
         val executor = checkNotNull(streamingExecutor)
-        return CompletableFuture.supplyAsync(
-            {
-                val created = factory()
-                synchronized(lock) {
-                    if (closed.get()) {
-                        runCatching { created.close() }
-                        throw IllegalStateException("DadbSession closed during streaming connection setup")
+        val attempt = FutureTask(
+            object : Callable<Dadb> {
+                override fun call(): Dadb {
+                    val created = factory()
+                    synchronized(lock) {
+                        if (closed.get()) {
+                            runCatching { created.close() }
+                            throw IllegalStateException("DadbSession closed during streaming connection setup")
+                        }
+                        streaming?.let { active ->
+                            if (active !== created) runCatching { created.close() }
+                            return active
+                        }
+                        streaming = created
+                        return created
                     }
-                    streaming?.let { active ->
-                        if (active !== created) runCatching { created.close() }
-                        return@supplyAsync active
-                    }
-                    streaming = created
-                    created
                 }
             },
-            executor,
-        ).also { streamingAttempt = it }
+        )
+        streamingAttempt = attempt
+        executor.execute(attempt)
+        return attempt
     }
 }

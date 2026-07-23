@@ -113,7 +113,10 @@ internal abstract class MessageQueue<V> {
         val streamQueues = queues[localId] ?: return
 
         val command = getCommand(message)
-        val commandQueue = streamQueues.computeIfAbsent(command) { ConcurrentLinkedQueue() }
+        val commandQueue =
+            PlatformApiCompat.getOrPut(streamQueues, command) {
+                ConcurrentLinkedQueue()
+            }
 
         commandQueue.add(message)
     }
