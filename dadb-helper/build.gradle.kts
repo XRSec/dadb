@@ -42,9 +42,9 @@ java {
 
 val helperClassesJar =
     tasks.named<Jar>("jar") {
-        archiveBaseName.set("dadb-device-helper-classes")
+        archiveBaseName.set("dadb-helper-classes")
         manifest {
-            attributes["Main-Class"] = "dadb.helper.AppIconExportMain"
+            attributes["Main-Class"] = "dadb.helper.HelperVersionMain"
         }
     }
 
@@ -74,7 +74,7 @@ tasks.register<Zip>("dexJar") {
     dependsOn(dexHelperClasses)
     from(dexOutputDir)
     include("classes.dex")
-    archiveBaseName.set("dadb-device-helper")
+    archiveBaseName.set("dadb-helper")
     archiveExtension.set("jar")
     destinationDirectory.set(layout.buildDirectory.dir("libs"))
 }

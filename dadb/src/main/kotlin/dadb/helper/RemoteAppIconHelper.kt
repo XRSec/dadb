@@ -11,21 +11,19 @@ import java.util.zip.ZipInputStream
 
 class RemoteAppIconData(
     val label: String,
-    val iconHash: String,
-    val imageBytes: ByteArray?,
-    val changed: Boolean,
-)
-
-data class RemoteAppIconBatchRequest(
-    val packageName: String,
-    val localHash: String?,
+    val versionCode: Long,
+    val versionName: String,
+    val lastUpdateTime: Long,
+    val imageBytes: ByteArray,
 )
 
 class RemoteChangedAppIcon(
     val packageName: String,
     val label: String,
-    val iconHash: String,
-    val imageBytes: ByteArray?,
+    val versionCode: Long,
+    val versionName: String,
+    val lastUpdateTime: Long,
+    val imageBytes: ByteArray,
 )
 
 data class RemoteAppIconBatchData(
@@ -112,16 +110,9 @@ data class RemoteHelperFileState(
     val detail: String,
 )
 
-const val DADB_DEVICE_HELPER_VERSION = "1.3.1"
-const val DEFAULT_REMOTE_HELPER_PATH = "/data/local/tmp/dadb-device-helper.jar"
-private const val HELPER_MISSING_MARKER = "DADB_HELPER_MISSING"
-private const val HELPER_VERSION_MISMATCH_MARKER = "DADB_HELPER_VERSION_MISMATCH"
-private const val FORCE_PUSH =  false
-
 @Throws(IOException::class)
 fun Dadb.loadAppIconWithHelper(
     packageName: String,
-    localHash: String? = null,
     localHelperJar: File,
     remoteHelperPath: String = DEFAULT_REMOTE_HELPER_PATH,
 ): RemoteAppIconData {
@@ -129,12 +120,7 @@ fun Dadb.loadAppIconWithHelper(
 
     val response =
         invokeRemoteHelperWithUploadRetry(
-            args =
-                buildList {
-                    add("icon")
-                    add(packageName)
-                    localHash?.takeIf { it.isNotBlank() }?.let(::add)
-                },
+            args = listOf("icon", packageName),
             remoteHelperPath = remoteHelperPath,
             localHelperJar = localHelperJar,
         )
@@ -167,53 +153,45 @@ fun Dadb.loadAppIconWithHelper(
             .filter(String::isNotBlank)
             .toList()
 
-    if (lines.size < 3) {
+    if (lines.size < 5) {
         throw IOException("Remote app icon helper returned unexpected output")
     }
 
-    val changed = lines[0] == "CHANGED"
-    val iconHash = lines[1]
     val label =
         String(
-            lines[2].decodeBase64()?.toByteArray()
+            lines[0].decodeBase64()?.toByteArray()
                 ?: throw IOException("Remote app icon helper returned invalid label payload"),
             Charsets.UTF_8,
         )
-    val imageBytes =
-        if (changed) {
-            lines.getOrNull(3)?.decodeBase64()?.toByteArray()
-                ?: throw IOException("Remote app icon helper missing changed icon payload")
-        } else {
-            null
-        }
+    val versionCode = lines[1].toLongOrNull()
+        ?: throw IOException("Remote app icon helper returned invalid version code")
+    val versionName = lines[2].decodeHelperText("version name")
+    val lastUpdateTime = lines[3].toLongOrNull()
+        ?: throw IOException("Remote app icon helper returned invalid update time")
+    val imageBytes = lines.getOrNull(4)?.decodeBase64()?.toByteArray()
+        ?: throw IOException("Remote app icon helper missing icon payload")
 
     return RemoteAppIconData(
         label = label,
-        iconHash = iconHash,
+        versionCode = versionCode,
+        versionName = versionName,
+        lastUpdateTime = lastUpdateTime,
         imageBytes = imageBytes,
-        changed = changed,
     )
 }
 
 @Throws(IOException::class)
 fun Dadb.loadAppIconBatchWithHelper(
-    requests: List<RemoteAppIconBatchRequest>,
+    packageNames: List<String>,
     localHelperJar: File,
     remoteHelperPath: String = DEFAULT_REMOTE_HELPER_PATH,
 ): RemoteAppIconBatchData {
     require(localHelperJar.exists()) { "Local helper jar not found: ${localHelperJar.absolutePath}" }
-    if (requests.isEmpty()) {
+    if (packageNames.isEmpty()) {
         return RemoteAppIconBatchData(entries = emptyList())
     }
 
-    val requestPayload =
-        requests.joinToString(separator = "\n") { request ->
-            buildString {
-                append(request.packageName)
-                append('\t')
-                append(request.localHash.orEmpty())
-            }
-        }
+    val requestPayload = packageNames.joinToString(separator = "\n")
     val encodedRequest = requestPayload.toByteArray(Charsets.UTF_8).toByteString().base64()
 
     val response =
@@ -467,34 +445,6 @@ fun Dadb.loadAppListPageWithHelper(
 }
 
 @Throws(IOException::class)
-fun Dadb.ensureRemoteAppIconHelper(
-    localHelperJar: File,
-    remoteHelperPath: String = DEFAULT_REMOTE_HELPER_PATH,
-) {
-    require(localHelperJar.exists()) { "Local helper jar not found: ${localHelperJar.absolutePath}" }
-    invokeRemoteHelperWithUploadRetry(listOf("ping"), remoteHelperPath, localHelperJar)
-}
-
-@Throws(IOException::class)
-fun Dadb.prepareRemoteAppIconHelper(
-    localHelperJar: File,
-    remoteHelperPath: String = DEFAULT_REMOTE_HELPER_PATH,
-): RemoteHelperFileState {
-    require(localHelperJar.exists()) { "Local helper jar not found: ${localHelperJar.absolutePath}" }
-    val response = invokeRemoteHelperWithUploadRetry(listOf("ping"), remoteHelperPath, localHelperJar)
-    if (response.exitCode != 0 || response.output.trim() != "PING_OK") {
-        throw IOException(
-            "Remote helper readiness check failed (exit=${response.exitCode}) " +
-                "stdout=${response.output.trim()} stderr=${response.errorOutput.trim()}",
-        )
-    }
-    return RemoteHelperFileState(
-        exists = true,
-        detail = "Helper hash verified",
-    )
-}
-
-@Throws(IOException::class)
 fun Dadb.injectRemoteTextWithHelper(
     text: String,
     localHelperJar: File,
@@ -562,53 +512,21 @@ private fun Dadb.invokeRemoteHelperWithUploadRetry(
     remoteHelperPath: String,
     localHelperJar: File,
 ) = run {
+    prepareRemoteDadbHelper(localHelperJar, remoteHelperPath)
     val helperCommand =
         buildString {
             append("CLASSPATH=")
             append(shellQuote(remoteHelperPath))
-            append(" exec app_process / dadb.helper.AppIconExportMain invoke ")
-            append(shellQuote(DADB_DEVICE_HELPER_VERSION))
+            append(" exec app_process / dadb.helper.AppIconExportMain")
             args.forEach { arg ->
                 append(' ')
                 append(shellQuote(arg))
             }
         }
-    val guardedCommand =
-        buildString {
-            append("if [ ! -f ")
-            append(shellQuote(remoteHelperPath))
-            append(" ]; then echo ")
-            append(HELPER_MISSING_MARKER)
-            append("; else ")
-            append(helperCommand)
-            append("; fi")
-        }
-    if (FORCE_PUSH) {
-        // 每次都覆盖 push
-        push(localHelperJar, remoteHelperPath)
-    }
-    fun execute() = shell(guardedCommand)
-
-    val firstResponse = execute()
-    if (!isHelperUnavailableOutput(firstResponse.output)) {
-        return@run firstResponse
-    }
-    push(localHelperJar, remoteHelperPath)
-    val retryResponse = execute()
-    if (isHelperUnavailableOutput(retryResponse.output)) {
-        throw IOException(
-            "Remote helper remained unavailable after upload: ${retryResponse.output.trim()}",
-        )
-    }
-    retryResponse
+    shell(helperCommand)
 }
 
-private fun isHelperUnavailableOutput(output: String): Boolean {
-    val status = output.lineSequence().firstOrNull()?.trim().orEmpty()
-    return status == HELPER_MISSING_MARKER || status == HELPER_VERSION_MISMATCH_MARKER
-}
-
-private fun parseAppIconBatchResponse(output: String): RemoteAppIconBatchData {
+internal fun parseAppIconBatchResponse(output: String): RemoteAppIconBatchData {
     val lines =
         output.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
     if (lines.size < 3 || lines[0] != "BATCH") {
@@ -639,17 +557,20 @@ private fun parseAppIconBatchResponse(output: String): RemoteAppIconBatchData {
         entries =
             manifestLines.map { line ->
                 val parts = line.split('\t')
-                if (parts.size < 4) {
+                if (parts.size < 6) {
                     throw IOException("Remote app icon batch helper returned unexpected manifest line: $line")
                 }
-                val entryName = parts[3]
+                val entryName = parts[5]
                 RemoteChangedAppIcon(
                     packageName = parts[0],
                     label = parts[1].decodeHelperText("label"),
-                    iconHash = parts[2],
-                    imageBytes =
-                        if (entryName == "-") null else zipEntries[entryName]
-                            ?: throw IOException("Remote app icon batch helper missing zip entry: $entryName"),
+                    versionCode = parts[2].toLongOrNull()
+                        ?: throw IOException("Remote app icon batch helper returned invalid version code"),
+                    versionName = parts[3].decodeHelperText("version name"),
+                    lastUpdateTime = parts[4].toLongOrNull()
+                        ?: throw IOException("Remote app icon batch helper returned invalid update time"),
+                    imageBytes = zipEntries[entryName]
+                        ?: throw IOException("Remote app icon batch helper missing zip entry: $entryName"),
                 )
             },
     )

@@ -5,6 +5,9 @@ import dadb.Dadb
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 data class RemoteScreenshotFrame(
     val sourceWidth: Int,
@@ -25,41 +28,51 @@ enum class RemoteScreenshotCaptureBackend {
 class RemoteScreenshotStream internal constructor(
     private val stream: AdbStream,
 ) : Closeable {
+    private val closed = AtomicBoolean(false)
+    private val ioLock = ReentrantLock()
+
     init {
         val magic = stream.source.readInt()
         if (magic != SCREENSHOT_PROTOCOL_MAGIC) {
             stream.close()
             throw IOException("Remote screenshot helper returned an invalid protocol header")
         }
-        val version = stream.source.readByte().toInt() and 0xff
-        if (version != SCREENSHOT_PROTOCOL_VERSION) {
-            stream.close()
-            throw IOException("Unsupported remote screenshot protocol version: $version")
-        }
     }
 
-    @Synchronized
     fun requestFrame(): RemoteScreenshotFrame? {
-        stream.sink.writeByte(SCREENSHOT_COMMAND_NEXT).flush()
-        return when (val status = stream.source.readByte().toInt() and 0xff) {
-            SCREENSHOT_STATUS_FRAME -> readFrame()
-            SCREENSHOT_STATUS_ERROR -> throw IOException(readError())
-            SCREENSHOT_STATUS_NO_CHANGE -> {
-                val durationMillis = stream.source.readInt()
-                if (durationMillis < 0) {
-                    throw IOException("Remote screenshot helper returned an invalid wait duration: $durationMillis")
+        check(!closed.get()) { "Remote screenshot stream is closed" }
+        return ioLock.withLock {
+            check(!closed.get()) { "Remote screenshot stream is closed" }
+            stream.sink.writeByte(SCREENSHOT_COMMAND_NEXT).flush()
+            when (val status = stream.source.readByte().toInt() and 0xff) {
+                SCREENSHOT_STATUS_FRAME -> readFrame()
+                SCREENSHOT_STATUS_ERROR -> throw IOException(readError())
+                SCREENSHOT_STATUS_NO_CHANGE -> {
+                    val durationMillis = stream.source.readInt()
+                    if (durationMillis < 0) {
+                        throw IOException("Remote screenshot helper returned an invalid wait duration: $durationMillis")
+                    }
+                    null
                 }
-                null
+                else -> throw IOException("Remote screenshot helper returned an unknown status: $status")
             }
-            else -> throw IOException("Remote screenshot helper returned an unknown status: $status")
         }
     }
 
     override fun close() {
-        runCatching {
-            stream.sink.writeByte(SCREENSHOT_COMMAND_STOP).flush()
+        if (!closed.compareAndSet(false, true)) return
+        if (!ioLock.tryLock()) {
+            stream.close()
+            return
         }
-        stream.close()
+        try {
+            runCatching {
+                stream.sink.writeByte(SCREENSHOT_COMMAND_STOP).flush()
+            }
+            stream.close()
+        } finally {
+            ioLock.unlock()
+        }
     }
 
     private fun readFrame(): RemoteScreenshotFrame {
@@ -122,7 +135,7 @@ fun Dadb.openRemoteScreenshotStreamWithHelper(
 ): RemoteScreenshotStream {
     require(maxSize in 0..8192) { "maxSize must be between 0 and 8192" }
     require(jpegQuality in 1..100) { "jpegQuality must be between 1 and 100" }
-    prepareRemoteAppIconHelper(localHelperJar, remoteHelperPath)
+    prepareRemoteDadbHelper(localHelperJar, remoteHelperPath)
 
     val command =
         buildString {
@@ -141,7 +154,6 @@ private fun screenshotShellQuote(value: String): String = "'" + value.replace("'
 const val DEFAULT_SCREENSHOT_MAX_SIZE = 720
 const val DEFAULT_SCREENSHOT_JPEG_QUALITY = 55
 internal const val SCREENSHOT_PROTOCOL_MAGIC = 0x44534352
-internal const val SCREENSHOT_PROTOCOL_VERSION = 2
 internal const val SCREENSHOT_COMMAND_NEXT = 1
 internal const val SCREENSHOT_COMMAND_STOP = 2
 internal const val SCREENSHOT_STATUS_FRAME = 0

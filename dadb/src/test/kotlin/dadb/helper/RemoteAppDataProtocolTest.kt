@@ -1,11 +1,59 @@
 package dadb.helper
 
+import java.io.ByteArrayOutputStream
+import java.util.Base64
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RemoteAppDataProtocolTest {
+    @Test
+    fun `parses an empty icon batch`() {
+        val result = parseAppIconBatchResponse("BATCH\n-\n-")
+
+        assertTrue(result.entries.isEmpty())
+    }
+
+    @Test
+    fun `parses icon bytes with version metadata`() {
+        val imageBytes = byteArrayOf(1, 2, 3, 4)
+        val zipBytes =
+            ByteArrayOutputStream().also { output ->
+                ZipOutputStream(output).use { zip ->
+                    zip.putNextEntry(ZipEntry("com.example.app.webp"))
+                    zip.write(imageBytes)
+                    zip.closeEntry()
+                }
+            }.toByteArray()
+        val manifest =
+            listOf(
+                "com.example.app",
+                Base64.getEncoder().encodeToString("Example".toByteArray()),
+                "42",
+                Base64.getEncoder().encodeToString("4.2".toByteArray()),
+                "123456789",
+                "com.example.app.webp",
+            ).joinToString("\t")
+        val output =
+            listOf(
+                "BATCH",
+                Base64.getEncoder().encodeToString(manifest.toByteArray()),
+                Base64.getEncoder().encodeToString(zipBytes),
+            ).joinToString("\n")
+
+        val icon = parseAppIconBatchResponse(output).entries.single()
+
+        assertEquals("com.example.app", icon.packageName)
+        assertEquals("Example", icon.label)
+        assertEquals(42L, icon.versionCode)
+        assertEquals("4.2", icon.versionName)
+        assertEquals(123456789L, icon.lastUpdateTime)
+        assertTrue(imageBytes.contentEquals(icon.imageBytes))
+    }
+
     @Test
     fun `parses value missing and error fields without confusing a real zero`() {
         val output =

@@ -33,11 +33,8 @@ import android.view.KeyEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -50,8 +47,6 @@ import java.util.zip.ZipOutputStream;
 
 @SuppressLint("PrivateApi")
 public final class AppIconExportMain {
-    private static final String HELPER_VERSION = "1.3.1";
-    private static final String VERSION_MISMATCH_MARKER = "DADB_HELPER_VERSION_MISMATCH";
     private static final int ICON_SIZE = 48;
     private static final int MAX_ICON_THREADS = 4;
     private static final String MISSING_APP_FIELD = "M";
@@ -66,11 +61,12 @@ public final class AppIconExportMain {
                     "queries <requestBase64> | " +
                     "input_text <textBase64> | " +
                     "icons <requestBase64> | " +
-                    "icon <packageName> [localHash]";
+                    "icon <packageName>";
 
     private AppIconExportMain() {}
 
-    private record BatchIconResult(String packageName, String label, String iconHash,
+    private record BatchIconResult(String packageName, String label, long versionCode,
+                                   String versionName, long lastUpdateTime,
                                    String entryName, byte[] imageBytes) {
     }
 
@@ -85,19 +81,6 @@ public final class AppIconExportMain {
             System.err.println(USAGE);
             System.exit(2);
             return;
-        }
-
-        if ("invoke".equals(args[0])) {
-            if (args.length < 3) {
-                System.err.println("usage: invoke <version> <command> [args]");
-                System.exit(2);
-                return;
-            }
-            if (!HELPER_VERSION.equals(args[1])) {
-                System.out.println(VERSION_MISMATCH_MARKER);
-                return;
-            }
-            args = Arrays.copyOfRange(args, 2, args.length);
         }
 
         String command = args[0];
@@ -331,32 +314,26 @@ public final class AppIconExportMain {
         }
 
         String packageName = args[1];
-        String localHash = args.length >= 3 ? args[2] : "";
-
         PackageManager packageManager = getPackageManager(context);
         ApplicationInfo applicationInfo = packageManager.getApplicationInfo(packageName, 0);
+        PackageInfo packageInfo = packageManager.getPackageInfo(packageName, 0);
         String label = String.valueOf(packageManager.getApplicationLabel(applicationInfo));
         Bitmap bitmap = loadIconBitmap(packageManager, applicationInfo);
-        String argbHash = hashArgb(bitmap);
 
         String labelBase64 =
                 Base64.encodeToString(label.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-
-        if (!localHash.isEmpty() && localHash.equals(argbHash)) {
-            System.out.println("UNCHANGED");
-            System.out.println(argbHash);
-            System.out.println(labelBase64);
-            return;
-        }
+        String versionName = packageInfo.versionName != null ? packageInfo.versionName : "";
+        String versionNameBase64 = encodedField(versionName);
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         compressBitmap(bitmap, output);
 
         String iconBase64 = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP);
 
-        System.out.println("CHANGED");
-        System.out.println(argbHash);
         System.out.println(labelBase64);
+        System.out.println(getLongVersionCode(packageInfo));
+        System.out.println(versionNameBase64);
+        System.out.println(packageInfo.lastUpdateTime);
         System.out.println(iconBase64);
     }
 
@@ -559,7 +536,8 @@ public final class AppIconExportMain {
         boolean includeSystem = parseFlag(args[2]);
         boolean includeEnabled = parseFlag(args[3]);
         boolean includeDisabled = parseFlag(args[4]);
-        boolean includeDetails = containsField(args[5]);
+        boolean includeDetails = containsField(args[5], "details");
+        boolean includeVersionInfo = includeDetails || containsField(args[5], "list");
         Set<String> requestedPackages = decodePackageNames(args[6]);
         if (context == null) {
             handleAppDataCommandWithoutContext(
@@ -568,6 +546,7 @@ public final class AppIconExportMain {
                     includeEnabled,
                     includeDisabled,
                     includeDetails,
+                    includeVersionInfo,
                     requestedPackages
             );
             return;
@@ -589,7 +568,7 @@ public final class AppIconExportMain {
 
                 PackageInfo packageInfo = null;
                 String packageInfoError = null;
-                if (includeDetails) {
+                if (includeVersionInfo) {
                     try {
                         packageInfo = packageManager.getPackageInfo(appInfo.packageName, 0);
                     } catch (Exception error) {
@@ -611,7 +590,7 @@ public final class AppIconExportMain {
                 } catch (Exception error) {
                     labelField = errorAppField(error);
                 }
-                String unavailablePackageInfoField = includeDetails
+                String unavailablePackageInfoField = includeVersionInfo
                         ? errorAppField(packageInfoError != null ? packageInfoError : "Package information unavailable")
                         : MISSING_APP_FIELD;
                 String versionCodeField = packageInfo != null
@@ -628,9 +607,9 @@ public final class AppIconExportMain {
                 String targetSdkField = includeDetails
                         ? valueAppNumberField(appInfo.targetSdkVersion)
                         : MISSING_APP_FIELD;
-                String firstInstallTimeField = packageInfo != null
+                String firstInstallTimeField = includeDetails && packageInfo != null
                         ? valueAppNumberField(packageInfo.firstInstallTime)
-                        : unavailablePackageInfoField;
+                        : includeDetails ? unavailablePackageInfoField : MISSING_APP_FIELD;
                 String lastUpdateTimeField = packageInfo != null
                         ? valueAppNumberField(packageInfo.lastUpdateTime)
                         : unavailablePackageInfoField;
@@ -658,6 +637,7 @@ public final class AppIconExportMain {
                     includeEnabled,
                     includeDisabled,
                     includeDetails,
+                    includeVersionInfo,
                     requestedPackages
             );
             return;
@@ -670,6 +650,7 @@ public final class AppIconExportMain {
             boolean includeEnabled,
             boolean includeDisabled,
             boolean includeDetails,
+            boolean includeVersionInfo,
             Set<String> requestedPackages
     ) {
         String query = buildPmListPackagesCommand(includeUser, includeSystem, includeEnabled, includeDisabled);
@@ -720,8 +701,11 @@ public final class AppIconExportMain {
                 }
             }
             String labelField;
+            PackageInfo resolvedPackageInfo = null;
+            String packageInfoError = null;
             if (packageManager == null) {
                 labelField = MISSING_APP_FIELD;
+                packageInfoError = "Package manager unavailable";
             } else {
                 try {
                     ApplicationInfo applicationInfo = packageManager.getApplicationInfo(packageInfoRecord.packageName, 0);
@@ -729,10 +713,34 @@ public final class AppIconExportMain {
                 } catch (Exception error) {
                     labelField = errorAppField(error);
                 }
+                if (includeVersionInfo) {
+                    try {
+                        resolvedPackageInfo = packageManager.getPackageInfo(packageInfoRecord.packageName, 0);
+                    } catch (Exception error) {
+                        packageInfoError = describeError(error);
+                    }
+                }
             }
             String unavailableDetailField = includeDetails
                     ? errorAppField("System context unavailable")
                     : MISSING_APP_FIELD;
+            String unavailableVersionField = includeVersionInfo
+                    ? errorAppField(packageInfoError != null ? packageInfoError : "Package information unavailable")
+                    : MISSING_APP_FIELD;
+            String versionCodeField = resolvedPackageInfo != null
+                    ? valueAppNumberField(getLongVersionCode(resolvedPackageInfo))
+                    : unavailableVersionField;
+            String versionNameField = resolvedPackageInfo == null
+                    ? unavailableVersionField
+                    : resolvedPackageInfo.versionName != null
+                    ? valueAppTextField(resolvedPackageInfo.versionName)
+                    : MISSING_APP_FIELD;
+            String firstInstallTimeField = includeDetails && resolvedPackageInfo != null
+                    ? valueAppNumberField(resolvedPackageInfo.firstInstallTime)
+                    : unavailableDetailField;
+            String lastUpdateTimeField = resolvedPackageInfo != null
+                    ? valueAppNumberField(resolvedPackageInfo.lastUpdateTime)
+                    : unavailableVersionField;
 
             System.out.println(
                     packageInfoRecord.packageName + "\t" +
@@ -740,13 +748,13 @@ public final class AppIconExportMain {
                             valueAppBooleanField(enabled) + "\t" +
                             valueAppBooleanField(systemApp) + "\t" +
                             (sourceDir != null ? valueAppTextField(sourceDir) : MISSING_APP_FIELD) + "\t" +
-                            unavailableDetailField + "\t" +
+                            versionCodeField + "\t" +
                             apkSizeField + "\t" +
+                            versionNameField + "\t" +
                             unavailableDetailField + "\t" +
                             unavailableDetailField + "\t" +
-                            unavailableDetailField + "\t" +
-                            unavailableDetailField + "\t" +
-                            unavailableDetailField
+                            firstInstallTimeField + "\t" +
+                            lastUpdateTimeField
             );
         }
     }
@@ -932,9 +940,9 @@ public final class AppIconExportMain {
                 || sourceDir.startsWith("/odm/"));
     }
 
-    private static boolean containsField(String fields) {
+    private static boolean containsField(String fields, String requestedField) {
         for (String candidate : fields.split(",")) {
-            if ("details".equals(candidate.trim())) {
+            if (requestedField.equals(candidate.trim())) {
                 return true;
             }
         }
@@ -1008,19 +1016,21 @@ public final class AppIconExportMain {
 
         List<String> manifestLines = new ArrayList<>();
         ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();
-        try (ZipOutputStream zipOutputStream = new ZipOutputStream(zipBytes)) {
-            for (BatchIconResult result : results) {
-                if (result.imageBytes != null) {
+        if (!results.isEmpty()) {
+            try (ZipOutputStream zipOutputStream = new ZipOutputStream(zipBytes)) {
+                for (BatchIconResult result : results) {
                     zipOutputStream.putNextEntry(new ZipEntry(result.entryName));
                     zipOutputStream.write(result.imageBytes);
                     zipOutputStream.closeEntry();
+                    manifestLines.add(
+                            result.packageName + "\t" +
+                                    base64(result.label) + "\t" +
+                                    result.versionCode + "\t" +
+                                    encodedField(result.versionName) + "\t" +
+                                    result.lastUpdateTime + "\t" +
+                                    result.entryName
+                    );
                 }
-                manifestLines.add(
-                        result.packageName + "\t" +
-                                base64(result.label) + "\t" +
-                                result.iconHash + "\t" +
-                                result.entryName
-                );
             }
         }
 
@@ -1031,9 +1041,8 @@ public final class AppIconExportMain {
                                 joinLines(manifestLines).getBytes(StandardCharsets.UTF_8),
                                 Base64.NO_WRAP
                         );
-        boolean hasChangedIcons = hasChangedIcons(results);
         String zipBase64 =
-                manifestLines.isEmpty() || !hasChangedIcons
+                manifestLines.isEmpty()
                         ? "-"
                         : Base64.encodeToString(zipBytes.toByteArray(), Base64.NO_WRAP);
 
@@ -1047,25 +1056,29 @@ public final class AppIconExportMain {
             String line
     ) {
         try {
-            String[] parts = line.split("\t", 2);
-            String packageName = parts[0].trim();
+            String packageName = line.trim();
             if (packageName.isEmpty()) {
                 return null;
             }
 
-            String localHash = parts.length >= 2 ? parts[1].trim() : "";
             ApplicationInfo applicationInfo = packageManager.getApplicationInfo(packageName, 0);
+            PackageInfo packageInfo = packageManager.getPackageInfo(packageName, 0);
             String label = String.valueOf(packageManager.getApplicationLabel(applicationInfo));
             Bitmap bitmap = loadIconBitmap(packageManager, applicationInfo);
-            String iconHash = hashArgb(bitmap);
-            if (!localHash.isEmpty() && localHash.equals(iconHash)) {
-                return new BatchIconResult(packageName, label, iconHash, "-", null);
-            }
 
             ByteArrayOutputStream iconOutput = new ByteArrayOutputStream();
             compressBitmap(bitmap, iconOutput);
             String entryName = sanitizeEntryName(packageName) + ".webp";
-            return new BatchIconResult(packageName, label, iconHash, entryName, iconOutput.toByteArray());
+            String versionName = packageInfo.versionName != null ? packageInfo.versionName : "";
+            return new BatchIconResult(
+                    packageName,
+                    label,
+                    getLongVersionCode(packageInfo),
+                    versionName,
+                    packageInfo.lastUpdateTime,
+                    entryName,
+                    iconOutput.toByteArray()
+            );
         } catch (Exception ignored) {
             return null;
         }
@@ -1082,15 +1095,6 @@ public final class AppIconExportMain {
         return builder.toString();
     }
 
-    private static boolean hasChangedIcons(List<BatchIconResult> results) {
-        for (BatchIconResult result : results) {
-            if (result.imageBytes != null) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static boolean requiresSystemContext(String command) {
         return "probe_systemcontext".equals(command)
                 || "context".equals(command)
@@ -1101,7 +1105,7 @@ public final class AppIconExportMain {
             throws Exception {
         byte[] textBytes = Base64.decode(textBase64, Base64.DEFAULT);
         String text = new String(textBytes, StandardCharsets.UTF_8);
-        Context shellContext = new ShellContext(systemContext);
+        Context shellContext = createShellContext(systemContext);
 
         ClipboardManager clipboardManager =
                 (ClipboardManager) shellContext.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -1114,11 +1118,7 @@ public final class AppIconExportMain {
         contextField.set(clipboardManager, shellContext);
         clipboardManager.setPrimaryClip(ClipData.newPlainText(null, text));
 
-        android.hardware.input.InputManager inputManager =
-                (android.hardware.input.InputManager) shellContext.getSystemService(Context.INPUT_SERVICE);
-        if (inputManager == null) {
-            throw new IllegalStateException("Input service is unavailable");
-        }
+        android.hardware.input.InputManager inputManager = obtainShellInputManager(shellContext);
         java.lang.reflect.Method injectInputEvent =
                 android.hardware.input.InputManager.class.getMethod(
                         "injectInputEvent",
@@ -1150,8 +1150,28 @@ public final class AppIconExportMain {
         System.out.println("INPUT_TEXT_OK");
     }
 
-    private static final class ShellContext extends ContextWrapper {
-        private static final String SHELL_PACKAGE_NAME = "com.android.shell";
+    static android.hardware.input.InputManager obtainShellInputManager() throws Exception {
+        return obtainShellInputManager(createShellContext(obtainSystemContext()));
+    }
+
+    private static Context createShellContext(Context systemContext) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return new AttributionShellContext(systemContext);
+        }
+        return new ShellContext(systemContext);
+    }
+
+    private static android.hardware.input.InputManager obtainShellInputManager(Context shellContext) {
+        android.hardware.input.InputManager inputManager =
+                (android.hardware.input.InputManager) shellContext.getSystemService(Context.INPUT_SERVICE);
+        if (inputManager == null) {
+            throw new IllegalStateException("Input service is unavailable");
+        }
+        return inputManager;
+    }
+
+    private static class ShellContext extends ContextWrapper {
+        protected static final String SHELL_PACKAGE_NAME = "com.android.shell";
 
         ShellContext(Context base) {
             super(base);
@@ -1177,14 +1197,20 @@ public final class AppIconExportMain {
             return this;
         }
 
+    }
+
+    /** Keeps API 31 attribution types out of the API 21-compatible shell context. */
+    @SuppressLint("NewApi")
+    private static final class AttributionShellContext extends ShellContext {
+        AttributionShellContext(Context base) {
+            super(base);
+        }
+
         @Override
         public AttributionSource getAttributionSource() {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                return new AttributionSource.Builder(android.os.Process.SHELL_UID)
-                        .setPackageName(SHELL_PACKAGE_NAME)
-                        .build();
-            }
-            return super.getAttributionSource();
+            return new AttributionSource.Builder(android.os.Process.SHELL_UID)
+                    .setPackageName(SHELL_PACKAGE_NAME)
+                    .build();
         }
     }
 
@@ -1603,21 +1629,6 @@ public final class AppIconExportMain {
 
     private static String base64(String value) {
         return Base64.encodeToString(value.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-    }
-
-    private static String hashArgb(Bitmap bitmap) throws Exception {
-        int[] pixels = new int[bitmap.getWidth() * bitmap.getHeight()];
-        bitmap.getPixels(pixels, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-        ByteBuffer buffer = ByteBuffer.allocate(pixels.length * 4);
-        for (int pixel : pixels) {
-            buffer.putInt(pixel);
-        }
-        byte[] digest = MessageDigest.getInstance("SHA-256").digest(buffer.array());
-        StringBuilder builder = new StringBuilder(digest.length * 2);
-        for (byte value : digest) {
-            builder.append(String.format("%02x", value));
-        }
-        return builder.toString();
     }
 
     @SuppressWarnings("deprecation")

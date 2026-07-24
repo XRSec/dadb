@@ -14,7 +14,7 @@ class RemoteScreenshotHelperTest {
     @Test
     fun `opens screenshot stream when peer only supports legacy shell`() {
         val dadb = LegacyShellDadb()
-        val localHelperJar = File.createTempFile("dadb-device-helper", ".jar")
+        val localHelperJar = File.createTempFile("dadb-helper", ".jar")
 
         try {
             dadb
@@ -120,8 +120,21 @@ class RemoteScreenshotHelperTest {
     }
 
     @Test
+    fun `close sends one stop command and rejects later requests`() {
+        val sink = Buffer()
+        val stream = RemoteScreenshotStream(FakeAdbStream(protocolSource(), sink))
+
+        stream.close()
+        stream.close()
+
+        assertEquals(SCREENSHOT_COMMAND_STOP.toByte(), sink.readByte())
+        assertEquals(true, sink.exhausted())
+        assertFailsWith<IllegalStateException> { stream.requestFrame() }
+    }
+
+    @Test
     fun `invalid handshake is rejected`() {
-        val source = Buffer().apply { writeInt(0).writeByte(SCREENSHOT_PROTOCOL_VERSION) }
+        val source = Buffer().apply { writeInt(0) }
 
         assertFailsWith<IOException> {
             RemoteScreenshotStream(FakeAdbStream(source, Buffer()))
@@ -131,7 +144,6 @@ class RemoteScreenshotHelperTest {
     private fun protocolSource(): Buffer =
         Buffer()
             .writeInt(SCREENSHOT_PROTOCOL_MAGIC)
-            .writeByte(SCREENSHOT_PROTOCOL_VERSION)
 
     private class FakeAdbStream(
         override val source: Buffer,
@@ -147,11 +159,10 @@ class RemoteScreenshotHelperTest {
             openedDestinations += destination
             val source =
                 when {
-                    destination.startsWith("shell:") -> Buffer().writeUtf8("PING_OK\n")
+                    destination.startsWith("shell:") -> Buffer().writeUtf8("DADB_HELPER_READY\n")
                     destination.startsWith("exec:") ->
                         Buffer()
                             .writeInt(SCREENSHOT_PROTOCOL_MAGIC)
-                            .writeByte(SCREENSHOT_PROTOCOL_VERSION)
                     else -> error("Unexpected ADB destination: $destination")
                 }
             return FakeAdbStream(source, Buffer())

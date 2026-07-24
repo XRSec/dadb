@@ -27,7 +27,6 @@ import java.nio.charset.StandardCharsets;
  */
 public final class ScreenshotStreamMain {
     private static final int PROTOCOL_MAGIC = 0x44534352; // DSCR
-    private static final int PROTOCOL_VERSION = 2;
     private static final int COMMAND_NEXT = 1;
     private static final int COMMAND_STOP = 2;
     private static final int STATUS_FRAME = 0;
@@ -51,7 +50,6 @@ public final class ScreenshotStreamMain {
         DataOutputStream output = new DataOutputStream(System.out);
         try (DisplayCapture capture = new DisplayCapture(maxSize)) {
             output.writeInt(PROTOCOL_MAGIC);
-            output.writeByte(PROTOCOL_VERSION);
             output.flush();
 
             while (true) {
